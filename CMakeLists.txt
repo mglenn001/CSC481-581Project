@@ -15,6 +15,7 @@ add_executable(
     src/Input.cpp
     src/Collision.cpp
     src/Scaling.cpp
+    src/Timeline.cpp
 )
 
 target_link_libraries(

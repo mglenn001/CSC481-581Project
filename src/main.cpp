@@ -7,6 +7,7 @@
 #include "Input.h"
 #include "Collision.h"
 #include "Scaling.h"
+#include "Timeline.h"
 
 const int WINDOW_WIDTH = 1920;
 const int WINDOW_HEIGHT = 1080;
@@ -163,7 +164,16 @@ int main(int argc, char *argv[])
     bool running = true;
     SDL_Event event;
 
-    Uint64 lastTime = SDL_GetTicks();
+    // Uint64 lastTime = SDL_GetTicks();
+    // game timeline anchored to real time
+    Timeline gameTime;
+
+    // used so one key press only trigger once
+    bool pauseKeyWasPressed = false;
+    bool minusKeyWasPressed = false;
+    bool plusKeyWasPressed = false;
+
+
     // Main game loop
     while (running) {
 
@@ -174,9 +184,8 @@ int main(int argc, char *argv[])
             }
         }
 
-        Uint64 currentTime = SDL_GetTicks();
-        float deltaTime = (currentTime - lastTime) / 1000.0f;
-        lastTime = currentTime;
+        // Get elapsed game time from the timeline
+        float deltaTime = static_cast<float>(gameTime.getDeltaTime());
 
         // A: walk left
         // D: walk right
@@ -187,6 +196,71 @@ int main(int argc, char *argv[])
         // W + D: jump right
         // Shift + A: run left
         // Shift + D: run right
+        // P: Pause / unpause game time
+        // - = Decrease game speed
+        // + = Increase game speed
+
+        // P: Pause / unpause game time
+        bool pauseKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_P);
+        if (pauseKeyIsPressed && !pauseKeyWasPressed) {
+            if (gameTime.isPaused()) {
+                gameTime.unpause();
+                SDL_Log("Game resumes");
+            } else {
+                gameTime.pause();
+                SDL_Log("Game paused");
+            }
+        }
+        pauseKeyWasPressed = pauseKeyIsPressed;
+
+        // cycle game speed
+        // - = Decrease game speed
+        // + = Increase game speed
+        bool minusKeyIsPressed =
+            Input::isKeyPressed(SDL_SCANCODE_MINUS);
+
+        bool plusKeyIsPressed =
+            Input::isKeyPressed(SDL_SCANCODE_EQUALS);
+
+        // Decrease speed: 2.0x -> 1.0x -> 0.5x
+        if (minusKeyIsPressed && !minusKeyWasPressed) {
+
+            double currentScale = gameTime.getScale();
+
+            if (currentScale == 2.0) {
+                gameTime.setScale(1.0);
+            }
+            else if (currentScale == 1.0) {
+                gameTime.setScale(0.5);
+            }
+
+            SDL_Log(
+                "Game time scale: %.1fx",
+                gameTime.getScale()
+            );
+        }
+
+        // Increase speed: 0.5x -> 1.0x -> 2.0x
+        if (plusKeyIsPressed && !plusKeyWasPressed) {
+
+            double currentScale = gameTime.getScale();
+
+            if (currentScale == 0.5) {
+                gameTime.setScale(1.0);
+            }
+            else if (currentScale == 1.0) {
+                gameTime.setScale(2.0);
+            }
+
+            SDL_Log(
+                "Game time scale: %.1fx",
+                gameTime.getScale()
+            );
+        }
+
+        minusKeyWasPressed = minusKeyIsPressed;
+        plusKeyWasPressed = plusKeyIsPressed;
+
 
         // Toggle scaling mode with the T key
         bool scaleKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_T);
@@ -199,37 +273,39 @@ int main(int argc, char *argv[])
         }
         scaleKeyWasPressed = scaleKeyIsPressed;
 
-        // Input for Jumping (W key)
-        if (Input::isKeyPressed(SDL_SCANCODE_W)) {
-            physics.jump(player, 650.0f);
-        }
-
         const float WALK_SPEED = 300.0f;
         const float RUN_SPEED = 550.0f;
         float moveSpeed = WALK_SPEED;
 
-        // Input for moving left and right (A and D keys)
         if (Input::isKeyPressed(SDL_SCANCODE_LSHIFT) ||
             Input::isKeyPressed(SDL_SCANCODE_RSHIFT)) {
             moveSpeed = RUN_SPEED;
         }
 
-        if (Input::isKeyPressed(SDL_SCANCODE_A)) {
-            player.move(-moveSpeed * deltaTime, 0.0f);
-        }
+        if (!gameTime.isPaused()) { 
+            // Input for Jumping (W key)
+            if (Input::isKeyPressed(SDL_SCANCODE_W)) {
+                physics.jump(player, 650.0f);
+            }
 
-        if (Input::isKeyPressed(SDL_SCANCODE_D)) {
-            player.move(moveSpeed * deltaTime, 0.0f);
-        }
+            // Input for moving left and right (A and D keys)
+            if (Input::isKeyPressed(SDL_SCANCODE_A)) {
+                player.move(-moveSpeed * deltaTime, 0.0f);
+            }
 
-        // Input for crouching (S key)
-        if (Input::isKeyPressed(SDL_SCANCODE_S)) {
-            SDL_Log("S pressed - down/crouch action");
-        }
+            if (Input::isKeyPressed(SDL_SCANCODE_D)) {
+                player.move(moveSpeed * deltaTime, 0.0f);
+            }
 
-        // Input for attacking (Space key)
-        if (Input::isKeyPressed(SDL_SCANCODE_SPACE)) {
-            SDL_Log("Attack!");
+            // Input for crouching (S key)
+            if (Input::isKeyPressed(SDL_SCANCODE_S)) {
+                SDL_Log("S pressed - crouch action");
+            }
+
+            // Input for attacking (Space key)
+            if (Input::isKeyPressed(SDL_SCANCODE_SPACE)) {
+                SDL_Log("Attack!");
+            }
         }
 
         // Update physics
