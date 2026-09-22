@@ -1,6 +1,10 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3_image/SDL_image.h>
+#include <zmq.hpp>
+#include <sstream>
+#include <unordered_map>
+#include <string>
 
 #include "Entity.h"
 #include "Physics.h"
@@ -27,8 +31,26 @@ const int TOTEM_FRAME_COUNT = 8;
 const int TOTEM_FRAME_W = 64;
 const int TOTEM_FRAME_H = 192;
 
+struct RemotePlayerState {
+    float x;
+    float y;
+};
+
 int main(int argc, char *argv[])
 {
+
+    // Each game client must have its own ID.
+    // Example: ./main 1 ./main 2 ./main 3
+    if (argc < 2) {
+        SDL_Log("Usage: ./main <clientID>");
+        return 1;
+    }
+
+    int clientID = std::stoi(argv[1]);
+
+    SDL_Log("Starting client %d", clientID);
+
+
     // Initialize SDL
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         SDL_Log("Could not initialize SDL: %s", SDL_GetError());
@@ -160,6 +182,20 @@ int main(int argc, char *argv[])
         portal.setSpriteSheet(PORTAL_FRAME_COUNT, PORTAL_FRAME_W, PORTAL_FRAME_H);
         portal.setAnimationSpeed(6.0f);
     }
+
+
+    // Connect this game client to the headless server.
+    zmq::context_t context(1);
+
+    zmq::socket_t requester(context, zmq::socket_type::req);
+
+    requester.connect("tcp://localhost:5555");
+
+    SDL_Log("Client %d connected to game server", clientID);
+
+    std::unordered_map<int, RemotePlayerState> remotePlayers;
+
+
 
     bool running = true;
     SDL_Event event;
@@ -383,6 +419,60 @@ int main(int argc, char *argv[])
             player.setGrounded(true);
         }
 
+
+        // Network
+        // Send this client's current player position.
+        std::ostringstream requestStream;
+
+        requestStream
+            << clientID << " "
+            << player.getX() << " "
+            << player.getY();
+
+        std::string requestString = requestStream.str();
+
+        zmq::message_t request(requestString.size());
+
+        memcpy(request.data(), requestString.data(), requestString.size());
+
+        requester.send(request, zmq::send_flags::none);
+
+        // Receive all player positions from the server.
+        zmq::message_t reply;
+
+        requester.recv(reply, zmq::recv_flags::none);
+
+        std::string replyString(static_cast<char*>(reply.data()), reply.size());
+
+        // Parse:
+        // id x y;id x y;id x y;
+        std::stringstream playerStream(replyString);
+        std::string playerEntry;
+
+        while (std::getline(playerStream, playerEntry, ';')) {
+
+            if (playerEntry.empty()) {
+                continue;
+            }
+
+            std::stringstream entryStream(playerEntry);
+
+            int remoteID;
+            float remoteX;
+            float remoteY;
+
+            if (entryStream >> remoteID >> remoteX >> remoteY) {
+
+                // Don't store our own player as a remote player.
+                if (remoteID != clientID) {
+                    remotePlayers[remoteID] = {
+                        remoteX,
+                        remoteY
+                    };
+                }
+            }
+        }
+
         // Enemy patrol movement
         enemySkull.move(skullSpeed * skullDirection * deltaTime, 0.0f);
         if (enemySkull.getX() >= skullPatrolMaxX) {
@@ -450,6 +540,19 @@ int main(int argc, char *argv[])
         portal.render(renderer);
         totem.render(renderer);
         enemySkull.render(renderer);
+        // Render characters controlled by the other clients.
+        for (const auto& entry : remotePlayers) {
+            const RemotePlayerState& remote = entry.second;
+            Entity remotePlayer(
+                remote.x,
+                remote.y,
+                player.getWidth(),
+                player.getHeight()
+            );
+            remotePlayer.setTexture(playerTexture);
+            remotePlayer.setSpriteSheet(8, 128, 128);
+            remotePlayer.render(renderer);
+        }
         player.render(renderer);
 
         // Show the frame
@@ -475,6 +578,10 @@ int main(int argc, char *argv[])
 
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
+
+    requester.close();
+    context.close();
+    
     SDL_Quit();
 
     return 0;
