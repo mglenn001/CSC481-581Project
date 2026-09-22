@@ -28,6 +28,7 @@ add_executable(
     src/Collision.cpp
     src/Scaling.cpp
     src/Timeline.cpp
+    src/Networking.cpp
 )
 
 target_include_directories(

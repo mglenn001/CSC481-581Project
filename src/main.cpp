@@ -1,10 +1,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3_image/SDL_image.h>
-#include <zmq.hpp>
-#include <sstream>
-#include <unordered_map>
-#include <string>
+#include <thread>
 
 #include "Entity.h"
 #include "Physics.h"
@@ -12,6 +9,8 @@
 #include "Collision.h"
 #include "Scaling.h"
 #include "Timeline.h"
+#include "SharedData.h"
+#include "Networking.h"
 
 const int WINDOW_WIDTH = 1920;
 const int WINDOW_HEIGHT = 1080;
@@ -31,10 +30,6 @@ const int TOTEM_FRAME_COUNT = 8;
 const int TOTEM_FRAME_W = 64;
 const int TOTEM_FRAME_H = 192;
 
-struct RemotePlayerState {
-    float x;
-    float y;
-};
 
 int main(int argc, char *argv[])
 {
@@ -184,17 +179,23 @@ int main(int argc, char *argv[])
     }
 
 
-    // Connect this game client to the headless server.
-    zmq::context_t context(1);
+    // Shared data between the game loop and networking thread
+    SharedData sharedData;
 
-    zmq::socket_t requester(context, zmq::socket_type::req);
+    sharedData.playerX = player.getX();
+    sharedData.playerY = player.getY();
 
-    requester.connect("tcp://localhost:5555");
+    // Start networking in its own thread
+    std::thread networkThread(
+        networkingThread,
+        std::ref(sharedData),
+        clientID
+    );
 
-    SDL_Log("Client %d connected to game server", clientID);
-
-    std::unordered_map<int, RemotePlayerState> remotePlayers;
-
+    SDL_Log(
+        "Client %d networking thread created",
+        clientID
+    );
 
 
     bool running = true;
@@ -420,57 +421,14 @@ int main(int argc, char *argv[])
         }
 
 
-        // Network
-        // Send this client's current player position.
-        std::ostringstream requestStream;
+        // Share this player's latest position with the networking thread
+        {
+            std::lock_guard<std::mutex> lock(
+                sharedData.playerMutex
+            );
 
-        requestStream
-            << clientID << " "
-            << player.getX() << " "
-            << player.getY();
-
-        std::string requestString = requestStream.str();
-
-        zmq::message_t request(requestString.size());
-
-        memcpy(request.data(), requestString.data(), requestString.size());
-
-        requester.send(request, zmq::send_flags::none);
-
-        // Receive all player positions from the server.
-        zmq::message_t reply;
-
-        requester.recv(reply, zmq::recv_flags::none);
-
-        std::string replyString(static_cast<char*>(reply.data()), reply.size());
-
-        // Parse:
-        // id x y;id x y;id x y;
-        std::stringstream playerStream(replyString);
-        std::string playerEntry;
-
-        while (std::getline(playerStream, playerEntry, ';')) {
-
-            if (playerEntry.empty()) {
-                continue;
-            }
-
-            std::stringstream entryStream(playerEntry);
-
-            int remoteID;
-            float remoteX;
-            float remoteY;
-
-            if (entryStream >> remoteID >> remoteX >> remoteY) {
-
-                // Don't store our own player as a remote player.
-                if (remoteID != clientID) {
-                    remotePlayers[remoteID] = {
-                        remoteX,
-                        remoteY
-                    };
-                }
-            }
+            sharedData.playerX = player.getX();
+            sharedData.playerY = player.getY();
         }
 
         // Enemy patrol movement
@@ -541,17 +499,27 @@ int main(int argc, char *argv[])
         totem.render(renderer);
         enemySkull.render(renderer);
         // Render characters controlled by the other clients.
-        for (const auto& entry : remotePlayers) {
-            const RemotePlayerState& remote = entry.second;
-            Entity remotePlayer(
-                remote.x,
-                remote.y,
-                player.getWidth(),
-                player.getHeight()
+        {
+            std::lock_guard<std::mutex> lock(
+                sharedData.playerMutex
             );
-            remotePlayer.setTexture(playerTexture);
-            remotePlayer.setSpriteSheet(8, 128, 128);
-            remotePlayer.render(renderer);
+
+            for (const auto& entry : sharedData.remotePlayers) {
+
+                const RemotePlayerState& remote =
+                    entry.second;
+
+                Entity remotePlayer(
+                    remote.x,
+                    remote.y,
+                    player.getWidth(),
+                    player.getHeight()
+                );
+
+                remotePlayer.setTexture(playerTexture);
+                remotePlayer.setSpriteSheet(8, 128, 128);
+                remotePlayer.render(renderer);
+            }
         }
         player.render(renderer);
 
@@ -579,8 +547,13 @@ int main(int argc, char *argv[])
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
 
-    requester.close();
-    context.close();
+    // Tell networking thread to stop
+    sharedData.running.store(false);
+
+    // Wait for networking thread to finish
+    if (networkThread.joinable()) {
+        networkThread.join();
+    }
     
     SDL_Quit();
 
