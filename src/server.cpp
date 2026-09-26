@@ -7,9 +7,11 @@
 
 #define THREADS 1
 
-struct PlayerState {
-    float x;
-    float y;
+// Store peer endpoint info
+struct PeerInfo {
+    int clientID;
+    std::string ip;
+    int port;
 };
 
 int main()
@@ -22,14 +24,10 @@ int main()
 
     responder.bind("tcp://*:5555");
 
-    // Store the most recent position of every client
-    std::unordered_map<int, PlayerState> players;
+    // Track active peers registered with the server
+    std::unordered_map<int, PeerInfo> activePeers;
 
-    // Stores the last position printed to the terminal
-    std::unordered_map<int, PlayerState> lastReportedPositions;
-
-    std::cout << "Game server started on port 5555..." << std::endl;
-    std::cout << "Waiting for clients..." << std::endl;
+    std::cout << "P2P Tracker Server started on port 5555..." << std::endl;
 
     while (true) {
 
@@ -45,71 +43,28 @@ int main()
         std::string requestString(static_cast<char*>(request.data()), request.size());
 
         /*
-         * Expected message:
-         * clientID x y
+         * Expected message format from client:
+         * clientID peerPort x y
          */
         std::istringstream input(requestString);
 
         int clientID;
+        int peerPort;
         float x;
         float y;
 
-        if (input >> clientID >> x >> y) {
-
-            // Check whether this client is new
-            bool isNewClient =
-                players.find(clientID) == players.end();
-
-            // Always update the server's actual position.
-            // This keeps networking smooth.
-            players[clientID] = {x, y};
-
-            if (isNewClient) {
-
-                std::cout
-                    << "Client " << clientID
-                    << " connected at position: ("
-                    << x << ", " << y << ")"
-                    << std::endl;
-
-                lastReportedPositions[clientID] = {x, y};
-            }
-            else {
-
-                PlayerState last =
-                    lastReportedPositions[clientID];
-
-                float changeX = x - last.x;
-                float changeY = y - last.y;
-
-                // Only print after a noticeable movement
-                if (changeX >= 50.0f || changeX <= -50.0f ||
-                    changeY >= 50.0f || changeY <= -50.0f) {
-
-                    std::cout
-                        << "Client " << clientID
-                        << " moved to: ("
-                        << x << ", " << y << ")"
-                        << std::endl;
-
-                    lastReportedPositions[clientID] = {x, y};
-                }
-            }
+        if (input >> clientID >> peerPort >> x >> y) {
+            // Register or update peer info
+            activePeers[clientID] = { clientID, "127.0.0.1", peerPort };
         }
 
-        /*
-         * Send all known player positions back.
-         * Format:
-         * ID1 x y; ID2 x y;
-         */
+        // Send back list of active peer endpoints
+        // Format: clientId ip port; clientId ip port;
         std::ostringstream output;
-
-        for (const auto& entry : players) {
-
-            output
-                << entry.first << " "
-                << entry.second.x << " "
-                << entry.second.y << ";";
+        for (const auto& entry : activePeers) {
+            output << entry.second.clientID << " "
+                   << entry.second.ip << " "
+                   << entry.second.port << ";";
         }
 
         std::string replyString = output.str();
