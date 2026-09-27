@@ -149,6 +149,12 @@ void networkingThread(
                 RemotePlayerState
             > updatedRemotePlayers;
 
+            // Server-authoritative platform position parsed
+            // out of this same reply (reserved ID 0).
+            float updatedPlatformX = 0.0f;
+            float updatedPlatformY = 0.0f;
+            bool receivedPlatformUpdate = false;
+
 
             std::stringstream playerStream(
                 replyString
@@ -186,12 +192,20 @@ void networkingThread(
                     >> remoteY
                 ) {
 
+                    // Reserved ID 0: this is the server-
+                    // authoritative platform, not a player.
+                    if (remoteID == 0) {
+
+                        updatedPlatformX = remoteX;
+                        updatedPlatformY = remoteY;
+                        receivedPlatformUpdate = true;
+                    }
                     /*
                      * Don't store this client's
                      * own position as a remote
                      * player.
                      */
-                    if (remoteID != clientID) {
+                    else if (remoteID != clientID) {
 
                         updatedRemotePlayers[
                             remoteID
@@ -215,6 +229,11 @@ void networkingThread(
 
                 sharedData.remotePlayers =
                     updatedRemotePlayers;
+
+                if (receivedPlatformUpdate) {
+                    sharedData.platformX = updatedPlatformX;
+                    sharedData.platformY = updatedPlatformY;
+                }
             }
 
 

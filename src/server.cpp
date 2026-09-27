@@ -8,10 +8,24 @@
 #include <mutex>
 #include <vector>
 #include <cstring>
+#include <chrono>
 
 #define ZMQ_IO_THREADS 1
 #define MAX_CLIENTS 3
 #define BASE_PORT 5555
+
+// Reserved "client" ID used to smuggle the platform's position
+// through the same reply string as player positions. Real
+// clients are always IDs 1..MAX_CLIENTS, so 0 is safe.
+#define PLATFORM_ID 0
+
+// The platform patrols horizontally across the ground gap
+// (see GAP_START/GAP_END in main.cpp). These mirror that gap
+// assuming the default 1920x1080 window.
+#define PLATFORM_MIN_X 890.0f
+#define PLATFORM_MAX_X 1060.0f
+#define PLATFORM_Y 750.0f
+#define PLATFORM_SPEED 120.0f
 
 struct PlayerState {
     float x;
@@ -23,6 +37,58 @@ std::unordered_map<int, PlayerState> players;
 
 // Protects the shared player map
 std::mutex playersMutex;
+
+// Server-authoritative platform position.
+// Moved only by platformThread() below, driven by real wall-clock
+// time. No client input can change it, so it is identical for
+// every client regardless of that client's own Timeline speed.
+struct PlatformState {
+    float x;
+    float y;
+};
+
+PlatformState platformState{PLATFORM_MIN_X, PLATFORM_Y};
+std::mutex platformMutex;
+
+// Moves the platform back and forth using real elapsed time,
+// completely independent of any client's REQ/REP traffic.
+void platformThread()
+{
+    int direction = 1;
+
+    auto lastTick = std::chrono::steady_clock::now();
+
+    while (true) {
+
+        auto now = std::chrono::steady_clock::now();
+
+        float realDeltaTime =
+            std::chrono::duration<float>(now - lastTick).count();
+
+        lastTick = now;
+
+        {
+            std::lock_guard<std::mutex> lock(platformMutex);
+
+            platformState.x +=
+                PLATFORM_SPEED * direction * realDeltaTime;
+
+            if (platformState.x >= PLATFORM_MAX_X) {
+                platformState.x = PLATFORM_MAX_X;
+                direction = -1;
+            }
+
+            if (platformState.x <= PLATFORM_MIN_X) {
+                platformState.x = PLATFORM_MIN_X;
+                direction = 1;
+            }
+        }
+
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(16)
+        );
+    }
+}
 
 
 /*
@@ -202,6 +268,23 @@ void clientHandler(
         }
 
 
+        /*
+         * Append the server-authoritative platform position
+         * using the reserved PLATFORM_ID. This is the same
+         * position for every client's reply, because it only
+         * ever comes from platformThread()'s real-time loop,
+         * never from any client's own message rate/Timeline.
+         */
+        {
+            std::lock_guard<std::mutex> lock(platformMutex);
+
+            output
+                << PLATFORM_ID << " "
+                << platformState.x << " "
+                << platformState.y << ";";
+        }
+
+
         std::string replyString =
             output.str();
 
@@ -259,6 +342,14 @@ int main()
 
 
     /*
+     * Start the platform's own thread. It never talks to any
+     * client directly - it just updates shared state on real
+     * time, which clientHandler() reads and forwards.
+     */
+    std::thread platformThreadHandle(platformThread);
+
+
+    /*
      * Keep the server alive.
      *
      * Each client thread independently handles its
@@ -269,6 +360,10 @@ int main()
         if (thread.joinable()) {
             thread.join();
         }
+    }
+
+    if (platformThreadHandle.joinable()) {
+        platformThreadHandle.join();
     }
 
 

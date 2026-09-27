@@ -27,6 +27,13 @@ struct SharedData {
     // Positions received from the server
     std::unordered_map<int, RemotePlayerState> remotePlayers;
 
+    // Server-authoritative moving platform position.
+    // This is set only by data received over the network
+    // (reserved ID 0 in the reply string), never computed
+    // locally and never tied to this client's own Timeline.
+    float platformX = 0.0f;
+    float platformY = 0.0f;
+
     // Protect player positions shared between threads
     std::mutex playerMutex;
 };

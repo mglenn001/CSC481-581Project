@@ -144,6 +144,27 @@ int main(int argc, char *argv[])
 
     portal.setGravityEnabled(false);
 
+    // Moving platform: position comes entirely from the server
+    // (see SharedData.platformX/Y), never computed locally and
+    // never tied to this client's own Timeline. This is what
+    // keeps it in the same place for every client no matter
+    // that client's individual speed.
+    const float PLATFORM_WIDTH = 150.0f;
+    const float PLATFORM_HEIGHT = 40.0f;
+
+    Entity platform(
+        GAP_START,
+        GROUND_Y - 180.0f,
+        PLATFORM_WIDTH,
+        PLATFORM_HEIGHT
+    );
+
+    platform.setGravityEnabled(false);
+
+    // Tracks the platform's previous X so the player can be
+    // carried along by however far it moved this frame.
+    float previousPlatformX = platform.getX();
+
 
     // Load the player's sprite texture
     SDL_Texture* playerTexture =
@@ -580,6 +601,62 @@ int main(int argc, char *argv[])
         }
 
 
+        /*
+         * Server-authoritative platform sync.
+         *
+         * The position below comes only from the network reply
+         * (see Networking.cpp / SharedData.platformX/Y). It is
+         * never advanced using this client's own deltaTime or
+         * Timeline scale, so every client sees the exact same
+         * platform position regardless of its own speed.
+         */
+        float newPlatformX = previousPlatformX;
+        float newPlatformY = platform.getY();
+
+        {
+            std::lock_guard<std::mutex> lock(
+                sharedData.playerMutex
+            );
+
+            newPlatformX = sharedData.platformX;
+            newPlatformY = sharedData.platformY;
+        }
+
+        float platformDeltaX = newPlatformX - previousPlatformX;
+
+        platform.setPosition(newPlatformX, newPlatformY);
+
+        previousPlatformX = newPlatformX;
+
+
+        // Platform collision: stand on top of it and get
+        // carried along as it moves.
+        bool horizontallyOverPlatform =
+            playerRight > platform.getX()
+            &&
+            playerLeft < platform.getX() + platform.getWidth();
+
+        bool landingOnPlatform =
+            player.getY() + player.getHeight()
+                <= platform.getY() + 20.0f
+            &&
+            player.getY() + player.getHeight()
+                >= platform.getY() - 20.0f
+            &&
+            player.getVelocityY() >= 0.0f;
+
+        if (horizontallyOverPlatform && landingOnPlatform) {
+
+            player.setPosition(
+                player.getX() + platformDeltaX,
+                platform.getY() - player.getHeight()
+            );
+
+            player.setVelocityY(0.0f);
+            player.setGrounded(true);
+        }
+
+
         // Fall reset
         if (
             player.getY()
@@ -800,6 +877,10 @@ int main(int argc, char *argv[])
             deltaTime
         );
 
+        platform.updateAnimation(
+            deltaTime
+        );
+
 
         // Render objects
         portal.render(
@@ -811,6 +892,10 @@ int main(int argc, char *argv[])
         );
 
         enemySkull.render(
+            renderer
+        );
+
+        platform.render(
             renderer
         );
 
