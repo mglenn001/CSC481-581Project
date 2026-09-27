@@ -9,6 +9,8 @@
 #include <cstring>
 
 #define BASE_PORT 5555
+// Section 5: Ports used for direct peer-to-peer communication.
+#define PEER_BASE_PORT 6000
 
 void networkingThread(
     SharedData& sharedData,
@@ -45,6 +47,33 @@ void networkingThread(
 
         requester.connect(address);
 
+        // Section 5: This socket sends this player's position to the other clients.
+        zmq::socket_t peerPublisher(context, zmq::socket_type::pub);
+        peerPublisher.set(zmq::sockopt::linger,0);
+
+        // Section 5: Each client has its own peer port. Client 1 -> 6001, Client 2 -> 6002, and Client 3 -> 6003
+        int peerPort = PEER_BASE_PORT + clientID;
+        std::string peerAddress = "tcp://*:" + std::to_string(peerPort);
+        peerPublisher.bind(peerAddress);
+
+        // This socket receives positions from the other clients.
+        zmq::socket_t peerSubscriber(context, zmq::socket_type::sub);
+        peerSubscriber.set(zmq::sockopt::linger,0);
+        // Receive every peer message.
+        peerSubscriber.set(zmq::sockopt::subscribe,"");
+
+        // Section 5: Connect to the other clients.
+        for (int peerID = 1; peerID <= 3; peerID++) {
+            if (peerID == clientID) { continue; }
+        
+            int otherPeerPort = PEER_BASE_PORT + peerID;
+            std::string otherPeerAddress = "tcp://localhost:" + std::to_string(otherPeerPort);
+            peerSubscriber.connect(otherPeerAddress);
+        }
+
+        // Allow ZeroMQ time to establish P2P subscriptions across peers
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
         std::cout
             << "Client " << clientID
             << " networking thread started."
@@ -57,6 +86,7 @@ void networkingThread(
             << "."
             << std::endl;
 
+        std::cout << "Client " << clientID << " peer port " << peerPort << "." << std::endl;
 
         while (sharedData.running.load()) {
 
@@ -81,11 +111,11 @@ void networkingThread(
 
 
             /*
-             * Send this client's current position.
+             * Ask the server for the current
+             * platform position.
              *
-             * Format:
-             *
-             * clientID x y
+             * The server no longer needs to
+             * relay player positions.
              */
             std::ostringstream requestStream;
 
@@ -114,6 +144,14 @@ void networkingThread(
                 zmq::send_flags::none
             );
 
+            // Section 5: Send this player's position directly to the other clients.
+            // The server does not relay this data.
+            std::ostringstream peerStream;
+            peerStream << clientID << " " << localX << " " << localY;
+
+            std::string peerString = peerStream.str();
+            peerPublisher.send(zmq::buffer(peerString), zmq::send_flags::none);
+
 
             /*
              * Wait for this client's dedicated
@@ -139,23 +177,12 @@ void networkingThread(
                 reply.size()
             );
 
-
             /*
-             * Parse all player positions
-             * returned by the server.
+             * The server reply contains the
+             * server-authoritative platform.
+             * 
+             * ID 0 = platform.
              */
-            std::unordered_map<
-                int,
-                RemotePlayerState
-            > updatedRemotePlayers;
-
-            // Server-authoritative platform position parsed
-            // out of this same reply (reserved ID 0).
-            float updatedPlatformX = 0.0f;
-            float updatedPlatformY = 0.0f;
-            bool receivedPlatformUpdate = false;
-
-
             std::stringstream playerStream(
                 replyString
             );
@@ -192,50 +219,41 @@ void networkingThread(
                     >> remoteY
                 ) {
 
-                    // Reserved ID 0: this is the server-
-                    // authoritative platform, not a player.
+                    // ID 0 is the server's moving platform.
                     if (remoteID == 0) {
-
-                        updatedPlatformX = remoteX;
-                        updatedPlatformY = remoteY;
-                        receivedPlatformUpdate = true;
-                    }
-                    /*
-                     * Don't store this client's
-                     * own position as a remote
-                     * player.
-                     */
-                    else if (remoteID != clientID) {
-
-                        updatedRemotePlayers[
-                            remoteID
-                        ] = {
-                            remoteX,
-                            remoteY
-                        };
+                        std::lock_guard<std::mutex> lock(sharedData.playerMutex);
+                        sharedData.platformX = remoteX;
+                        sharedData.platformY = remoteY;
                     }
                 }
             }
 
+            // Section 5: Check for player positions sent directly from the other clients.
+            while (true) {
+                zmq::message_t peerMessage;
 
-            /*
-             * Safely update the remote player
-             * data used by the main/render thread.
-             */
-            {
-                std::lock_guard<std::mutex> lock(
-                    sharedData.playerMutex
-                );
+                // Prevents this client from getting stuck waiting for another client.
+                auto peerResult = peerSubscriber.recv(peerMessage, zmq::recv_flags::dontwait);
 
-                sharedData.remotePlayers =
-                    updatedRemotePlayers;
+                if (!peerResult) { break; }
 
-                if (receivedPlatformUpdate) {
-                    sharedData.platformX = updatedPlatformX;
-                    sharedData.platformY = updatedPlatformY;
+                std::string peerString(static_cast<char*>(peerMessage.data()), peerMessage.size());
+
+                std::stringstream peerStream(peerString);
+
+                int remoteID;
+                float remoteX;
+                float remoteY;
+
+                if (peerStream >> remoteID >> remoteX >> remoteY) {
+                    // Do not store this client's own position as a remote player.
+                    if (remoteID != clientID) {
+                        std::lock_guard<std::mutex> lock(sharedData.playerMutex);
+
+                        sharedData.remotePlayers[remoteID] = {remoteX,remoteY};
+                    }
                 }
             }
-
 
             /*
              * Section 4: Asynchronicity
@@ -270,6 +288,8 @@ void networkingThread(
 
 
         requester.close();
+        peerPublisher.close();
+        peerSubscriber.close();
         context.close();
     }
     catch (const zmq::error_t& e) {
