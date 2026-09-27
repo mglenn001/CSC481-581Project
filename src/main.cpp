@@ -104,41 +104,65 @@ int main(int argc, char *argv[])
 
     // Enable gravity for the player
     player.setGravityEnabled(true);
-    physics.setGravity(900.0f); // Set gravity strength (pixels per second squared)
+    physics.setGravity(900.0f);
 
     const float PORTAL_SPAWN_X = START_X;
     const float PORTAL_SPAWN_Y = GROUND_Y - player.getHeight();
 
     // Totem: static object, player must jump over it
-    Entity totem(400.0f, GROUND_Y - TOTEM_FRAME_H, (float)TOTEM_FRAME_W, (float)TOTEM_FRAME_H);
-    totem.setGravityEnabled(false); // it's static, it never moves
+    Entity totem(
+        400.0f,
+        GROUND_Y - TOTEM_FRAME_H,
+        (float)TOTEM_FRAME_W,
+        (float)TOTEM_FRAME_H
+    );
 
-    // Enemy skull: auto-moving patrol enemy, floats (no gravity)
-    Entity enemySkull(GAP_START, GROUND_Y - 150.0f, (float)SKULL_FRAME_W, (float)SKULL_FRAME_H);
+    totem.setGravityEnabled(false);
+
+    // Enemy skull: auto-moving patrol enemy
+    Entity enemySkull(
+        GAP_START,
+        GROUND_Y - 150.0f,
+        (float)SKULL_FRAME_W,
+        (float)SKULL_FRAME_H
+    );
+
     enemySkull.setGravityEnabled(false);
+
     float skullPatrolMinX = GAP_START;
     float skullPatrolMaxX = GAP_END;
     float skullSpeed = 150.0f;
-    int skullDirection = 1; // 1 = right, -1 = left
+    int skullDirection = 1;
 
-    // Portal: purely visual "respawn point" marker
-    Entity portal(START_X - 40.0f, GROUND_Y - PORTAL_FRAME_H, (float)PORTAL_FRAME_W, (float)PORTAL_FRAME_H);
+    // Portal: visual respawn point
+    Entity portal(
+        START_X - 40.0f,
+        GROUND_Y - PORTAL_FRAME_H,
+        (float)PORTAL_FRAME_W,
+        (float)PORTAL_FRAME_H
+    );
+
     portal.setGravityEnabled(false);
+
 
     // Load the player's sprite texture
     SDL_Texture* playerTexture =
-        IMG_LoadTexture(renderer, "../assets/darkworld_enemy_nyx_idle.png");
+        IMG_LoadTexture(
+            renderer,
+            "../assets/darkworld_enemy_nyx_idle.png"
+        );
 
-    // Check if the texture loaded correctly
     if (!playerTexture) {
-        SDL_Log("Could not load texture: %s", SDL_GetError());
+        SDL_Log(
+            "Could not load texture: %s",
+            SDL_GetError()
+        );
     }
     else {
         player.setTexture(playerTexture);
-
-        // Tell the entity how the sprite sheet is arranged
         player.setSpriteSheet(8, 128, 128);
     }
+
 
     // Load the brick
     SDL_Texture* brickTexture =
@@ -154,27 +178,63 @@ int main(int argc, char *argv[])
         );
     }
 
-    // Load and assign totem textures/sprite sheets
-    SDL_Texture* totemTexture = IMG_LoadTexture(renderer, "../assets/totem.png");
+
+    // Load totem texture
+    SDL_Texture* totemTexture =
+        IMG_LoadTexture(
+            renderer,
+            "../assets/totem.png"
+        );
+
     if (totemTexture) {
         totem.setTexture(totemTexture);
-        totem.setSpriteSheet(TOTEM_FRAME_COUNT, TOTEM_FRAME_W, TOTEM_FRAME_H);
+
+        totem.setSpriteSheet(
+            TOTEM_FRAME_COUNT,
+            TOTEM_FRAME_W,
+            TOTEM_FRAME_H
+        );
+
         totem.setAnimationSpeed(8.0f);
     }
 
-    // Load and assign skull textures/sprite sheets
-    SDL_Texture* skullTexture = IMG_LoadTexture(renderer, "../assets/enemy_skull.png");
+
+    // Load skull texture
+    SDL_Texture* skullTexture =
+        IMG_LoadTexture(
+            renderer,
+            "../assets/enemy_skull.png"
+        );
+
     if (skullTexture) {
         enemySkull.setTexture(skullTexture);
-        enemySkull.setSpriteSheet(SKULL_FRAME_COUNT, SKULL_FRAME_W, SKULL_FRAME_H);
+
+        enemySkull.setSpriteSheet(
+            SKULL_FRAME_COUNT,
+            SKULL_FRAME_W,
+            SKULL_FRAME_H
+        );
+
         enemySkull.setAnimationSpeed(8.0f);
     }
 
-    // Load and assign portal textures/sprite sheets
-    SDL_Texture* portalTexture = IMG_LoadTexture(renderer, "../assets/swirlingorb.png");
+
+    // Load portal texture
+    SDL_Texture* portalTexture =
+        IMG_LoadTexture(
+            renderer,
+            "../assets/swirlingorb.png"
+        );
+
     if (portalTexture) {
         portal.setTexture(portalTexture);
-        portal.setSpriteSheet(PORTAL_FRAME_COUNT, PORTAL_FRAME_W, PORTAL_FRAME_H);
+
+        portal.setSpriteSheet(
+            PORTAL_FRAME_COUNT,
+            PORTAL_FRAME_W,
+            PORTAL_FRAME_H
+        );
+
         portal.setAnimationSpeed(6.0f);
     }
 
@@ -201,11 +261,10 @@ int main(int argc, char *argv[])
     bool running = true;
     SDL_Event event;
 
-    // Uint64 lastTime = SDL_GetTicks();
-    // game timeline anchored to real time
+    // Game timeline anchored to real time
     Timeline gameTime;
 
-    // used so one key press only trigger once
+    // Used so one key press only triggers once
     bool pauseKeyWasPressed = false;
     bool minusKeyWasPressed = false;
     bool plusKeyWasPressed = false;
@@ -221,48 +280,79 @@ int main(int argc, char *argv[])
             }
         }
 
+
         // Get elapsed game time from the timeline
-        float deltaTime = static_cast<float>(gameTime.getDeltaTime());
+        float deltaTime =
+            static_cast<float>(
+                gameTime.getDeltaTime()
+            );
 
-        // A: walk left
-        // D: walk right
-        // W: jump
-        // S: crouch
-        // Space: Attack
-        // W + A: jump left
-        // W + D: jump right
-        // Shift + A: run left
-        // Shift + D: run right
-        // P: Pause / unpause game time
-        // - = Decrease game speed
-        // + = Increase game speed
 
-        // P: Pause / unpause game time
-        bool pauseKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_P);
-        if (pauseKeyIsPressed && !pauseKeyWasPressed) {
+        /*
+         * Controls
+         *
+         * A = left
+         * D = right
+         * W = jump
+         * Shift = run
+         * P = pause / unpause
+         * - = decrease game speed
+         * + = increase game speed
+         * T = scaling mode
+         */
+
+
+        // Pause / unpause
+        bool pauseKeyIsPressed =
+            Input::isKeyPressed(
+                SDL_SCANCODE_P
+            );
+
+        if (
+            pauseKeyIsPressed &&
+            !pauseKeyWasPressed
+        ) {
             if (gameTime.isPaused()) {
                 gameTime.unpause();
-                SDL_Log("Game resumes");
-            } else {
+
+                SDL_Log(
+                    "Game resumes"
+                );
+            }
+            else {
                 gameTime.pause();
-                SDL_Log("Game paused");
+
+                SDL_Log(
+                    "Game paused"
+                );
             }
         }
-        pauseKeyWasPressed = pauseKeyIsPressed;
 
-        // cycle game speed
-        // - = Decrease game speed
-        // + = Increase game speed
+        pauseKeyWasPressed =
+            pauseKeyIsPressed;
+
+
+        // Timeline scaling
         bool minusKeyIsPressed =
-            Input::isKeyPressed(SDL_SCANCODE_MINUS);
+            Input::isKeyPressed(
+                SDL_SCANCODE_MINUS
+            );
 
         bool plusKeyIsPressed =
-            Input::isKeyPressed(SDL_SCANCODE_EQUALS);
+            Input::isKeyPressed(
+                SDL_SCANCODE_EQUALS
+            );
 
-        // Decrease speed: 2.0x -> 1.0x -> 0.5x
-        if (minusKeyIsPressed && !minusKeyWasPressed) {
 
-            double currentScale = gameTime.getScale();
+        // Decrease:
+        // 2.0x -> 1.0x -> 0.5x
+        if (
+            minusKeyIsPressed &&
+            !minusKeyWasPressed
+        ) {
+
+            double currentScale =
+                gameTime.getScale();
 
             if (currentScale == 2.0) {
                 gameTime.setScale(1.0);
@@ -277,10 +367,16 @@ int main(int argc, char *argv[])
             );
         }
 
-        // Increase speed: 0.5x -> 1.0x -> 2.0x
-        if (plusKeyIsPressed && !plusKeyWasPressed) {
 
-            double currentScale = gameTime.getScale();
+        // Increase:
+        // 0.5x -> 1.0x -> 2.0x
+        if (
+            plusKeyIsPressed &&
+            !plusKeyWasPressed
+        ) {
+
+            double currentScale =
+                gameTime.getScale();
 
             if (currentScale == 0.5) {
                 gameTime.setScale(1.0);
@@ -295,89 +391,200 @@ int main(int argc, char *argv[])
             );
         }
 
-        minusKeyWasPressed = minusKeyIsPressed;
-        plusKeyWasPressed = plusKeyIsPressed;
+
+        minusKeyWasPressed =
+            minusKeyIsPressed;
+
+        plusKeyWasPressed =
+            plusKeyIsPressed;
 
 
-        // Toggle scaling mode with the T key
-        bool scaleKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_T);
-        if (scaleKeyIsPressed && !scaleKeyWasPressed) {
+        /*
+         * Section 4:
+         * Share this client's current timeline speed
+         * with the networking thread.
+         *
+         * This allows each client to communicate
+         * with the server at a rate based on its
+         * own timeline scale.
+         */
+        sharedData.timeScale.store(
+            gameTime.getScale()
+        );
+
+
+        // Toggle scaling mode with T
+        bool scaleKeyIsPressed =
+            Input::isKeyPressed(
+                SDL_SCANCODE_T
+            );
+
+        if (
+            scaleKeyIsPressed &&
+            !scaleKeyWasPressed
+        ) {
             Scaling::toggleMode();
+
             SDL_Log(
                 "Scaling mode: %s",
-                (Scaling::getMode() == ScalingMode::PROPORTIONAL) ? "PROPORTIONAL" : "PIXEL"
+                (
+                    Scaling::getMode()
+                    == ScalingMode::PROPORTIONAL
+                )
+                    ? "PROPORTIONAL"
+                    : "PIXEL"
             );
         }
-        scaleKeyWasPressed = scaleKeyIsPressed;
+
+        scaleKeyWasPressed =
+            scaleKeyIsPressed;
+
 
         const float WALK_SPEED = 300.0f;
         const float RUN_SPEED = 550.0f;
-        float moveSpeed = WALK_SPEED;
 
-        if (Input::isKeyPressed(SDL_SCANCODE_LSHIFT) ||
-            Input::isKeyPressed(SDL_SCANCODE_RSHIFT)) {
-            moveSpeed = RUN_SPEED;
+        float moveSpeed =
+            WALK_SPEED;
+
+
+        if (
+            Input::isKeyPressed(
+                SDL_SCANCODE_LSHIFT
+            )
+            ||
+            Input::isKeyPressed(
+                SDL_SCANCODE_RSHIFT
+            )
+        ) {
+            moveSpeed =
+                RUN_SPEED;
         }
 
-        if (!gameTime.isPaused()) { 
-            // Input for Jumping (W key)
-            if (Input::isKeyPressed(SDL_SCANCODE_W)) {
-                physics.jump(player, 650.0f);
+
+        if (!gameTime.isPaused()) {
+
+            // Jump
+            if (
+                Input::isKeyPressed(
+                    SDL_SCANCODE_W
+                )
+            ) {
+                physics.jump(
+                    player,
+                    650.0f
+                );
             }
 
-            // Input for moving left and right (A and D keys)
-            if (Input::isKeyPressed(SDL_SCANCODE_A)) {
-                player.move(-moveSpeed * deltaTime, 0.0f);
+
+            // Move left
+            if (
+                Input::isKeyPressed(
+                    SDL_SCANCODE_A
+                )
+            ) {
+                player.move(
+                    -moveSpeed * deltaTime,
+                    0.0f
+                );
             }
 
-            if (Input::isKeyPressed(SDL_SCANCODE_D)) {
-                player.move(moveSpeed * deltaTime, 0.0f);
+
+            // Move right
+            if (
+                Input::isKeyPressed(
+                    SDL_SCANCODE_D
+                )
+            ) {
+                player.move(
+                    moveSpeed * deltaTime,
+                    0.0f
+                );
             }
 
-            // Input for crouching (S key)
-            if (Input::isKeyPressed(SDL_SCANCODE_S)) {
-                SDL_Log("S pressed - crouch action");
+
+            // Crouch placeholder
+            if (
+                Input::isKeyPressed(
+                    SDL_SCANCODE_S
+                )
+            ) {
+                SDL_Log(
+                    "S pressed - crouch action"
+                );
             }
 
-            // Input for attacking (Space key)
-            if (Input::isKeyPressed(SDL_SCANCODE_SPACE)) {
-                SDL_Log("Attack!");
+
+            // Attack placeholder
+            if (
+                Input::isKeyPressed(
+                    SDL_SCANCODE_SPACE
+                )
+            ) {
+                SDL_Log(
+                    "Attack!"
+                );
             }
         }
+
 
         // Update physics
-        physics.update(player, deltaTime);
+        physics.update(
+            player,
+            deltaTime
+        );
+
 
         // Ground check
-        float playerLeft = player.getX();
+        float playerLeft =
+            player.getX();
 
-        float playerRight = player.getX() + player.getWidth();
+        float playerRight =
+            player.getX()
+            + player.getWidth();
 
-        bool overGap = playerRight > GAP_START && playerLeft < GAP_END;
+        bool overGap =
+            playerRight > GAP_START
+            &&
+            playerLeft < GAP_END;
 
-        // If player is NOT over the gap,
-        // let them land on the brick ground
+
         if (
-            !overGap &&
-            player.getY() + player.getHeight() >= GROUND_Y &&
-            player.getVelocityY() >= 0.0f
+            !overGap
+            &&
+            player.getY()
+                + player.getHeight()
+                >= GROUND_Y
+            &&
+            player.getVelocityY()
+                >= 0.0f
         ) {
 
             player.setPosition(
                 player.getX(),
-                GROUND_Y - player.getHeight()
+                GROUND_Y
+                    - player.getHeight()
             );
 
-            player.setVelocityY(0.0f);
+            player.setVelocityY(
+                0.0f
+            );
 
-            player.setGrounded(true);
+            player.setGrounded(
+                true
+            );
         }
         else {
-            player.setGrounded(false);
+            player.setGrounded(
+                false
+            );
         }
 
-        // Fail/Reset
-        if (player.getY() > actualHeight) {
+
+        // Fall reset
+        if (
+            player.getY()
+            > actualHeight
+        ) {
 
             SDL_Log(
                 "Player fell! Respawning at the portal."
@@ -393,70 +600,155 @@ int main(int argc, char *argv[])
                 0.0f
             );
 
-            player.setGrounded(true);
+            player.setGrounded(
+                true
+            );
         }
 
-        // Collision: totem blocks the player like a wall
-        if (Collision::checkCollision(player, totem)) {
-            if (Input::isKeyPressed(SDL_SCANCODE_A)) {
-                player.move(moveSpeed * deltaTime, 0.0f);
+
+        // Totem collision
+        if (
+            Collision::checkCollision(
+                player,
+                totem
+            )
+        ) {
+
+            if (
+                Input::isKeyPressed(
+                    SDL_SCANCODE_A
+                )
+            ) {
+                player.move(
+                    moveSpeed * deltaTime,
+                    0.0f
+                );
             }
-            if (Input::isKeyPressed(SDL_SCANCODE_D)) {
-                player.move(-moveSpeed * deltaTime, 0.0f);
+
+            if (
+                Input::isKeyPressed(
+                    SDL_SCANCODE_D
+                )
+            ) {
+                player.move(
+                    -moveSpeed * deltaTime,
+                    0.0f
+                );
             }
         }
 
-        // Collision: enemy (ex: skull) sends player (ex: nxy) back to the portal
-        if (Collision::checkCollision(player, enemySkull)) {
-            SDL_Log("Player touched an enemy! Respawning at the portal.");
+
+        // Enemy collision
+        if (
+            Collision::checkCollision(
+                player,
+                enemySkull
+            )
+        ) {
+
+            SDL_Log(
+                "Player touched an enemy! Respawning at the portal."
+            );
+
             player.setPosition(
                 PORTAL_SPAWN_X,
                 PORTAL_SPAWN_Y
             );
+
             player.setVelocity(
                 0.0f,
                 0.0f
             );
-            player.setGrounded(true);
+
+            player.setGrounded(
+                true
+            );
         }
 
 
-        // Share this player's latest position with the networking thread
+        // Share local player position
         {
             std::lock_guard<std::mutex> lock(
                 sharedData.playerMutex
             );
 
-            sharedData.playerX = player.getX();
-            sharedData.playerY = player.getY();
+            sharedData.playerX =
+                player.getX();
+
+            sharedData.playerY =
+                player.getY();
         }
 
+
         // Enemy patrol movement
-        enemySkull.move(skullSpeed * skullDirection * deltaTime, 0.0f);
-        if (enemySkull.getX() >= skullPatrolMaxX) {
+        enemySkull.move(
+            skullSpeed
+                * skullDirection
+                * deltaTime,
+            0.0f
+        );
+
+        if (
+            enemySkull.getX()
+            >= skullPatrolMaxX
+        ) {
             skullDirection = -1;
         }
-        if (enemySkull.getX() <= skullPatrolMinX) {
+
+        if (
+            enemySkull.getX()
+            <= skullPatrolMinX
+        ) {
             skullDirection = 1;
         }
 
-        // Set background color to sage green
-        SDL_SetRenderDrawColor(renderer, 169, 186, 157, 255);
 
-        // Clear previous frame
-        SDL_RenderClear(renderer);
+        // Background color
+        SDL_SetRenderDrawColor(
+            renderer,
+            169,
+            186,
+            157,
+            255
+        );
 
-        // Render the brick ground
+        SDL_RenderClear(
+            renderer
+        );
+
+
+        // Render brick ground
         if (brickTexture) {
-            float groundScaleX = 1.0f;
-            float groundScaleY = 1.0f;
-            
-            if (Scaling::getMode() == ScalingMode::PROPORTIONAL) {
+
+            float groundScaleX =
+                1.0f;
+
+            float groundScaleY =
+                1.0f;
+
+
+            if (
+                Scaling::getMode()
+                == ScalingMode::PROPORTIONAL
+            ) {
+
                 int windowWidth = 0;
                 int windowHeight = 0;
-                SDL_GetRenderOutputSize(renderer, &windowWidth, &windowHeight);
-                Scaling::getScaleFactors(windowWidth, windowHeight, groundScaleX, groundScaleY);
+
+                SDL_GetRenderOutputSize(
+                    renderer,
+                    &windowWidth,
+                    &windowHeight
+                );
+
+                Scaling::getScaleFactors(
+                    windowWidth,
+                    windowHeight,
+                    groundScaleX,
+                    groundScaleY
+                );
             }
+
 
             for (
                 float x = 0.0f;
@@ -464,13 +756,16 @@ int main(int argc, char *argv[])
                 x += BRICK_WIDTH
             ) {
 
-                // Leave a gap in the ground
+                // Leave gap in ground
                 if (
-                    x + BRICK_WIDTH > GAP_START &&
+                    x + BRICK_WIDTH
+                        > GAP_START
+                    &&
                     x < GAP_END
                 ) {
                     continue;
                 }
+
 
                 SDL_FRect brickRect = {
                     x * groundScaleX,
@@ -478,6 +773,7 @@ int main(int argc, char *argv[])
                     BRICK_WIDTH * groundScaleX,
                     BRICK_HEIGHT * groundScaleY
                 };
+
 
                 SDL_RenderTexture(
                     renderer,
@@ -488,26 +784,51 @@ int main(int argc, char *argv[])
             }
         }
 
-        // Update the sprite animation
-        player.updateAnimation();
-        enemySkull.updateAnimation(deltaTime);
-        totem.updateAnimation(deltaTime);
-        portal.updateAnimation(deltaTime);
 
-        // Render the entity
-        portal.render(renderer);
-        totem.render(renderer);
-        enemySkull.render(renderer);
-        // Render characters controlled by the other clients.
+        // Update animations
+        player.updateAnimation();
+
+        enemySkull.updateAnimation(
+            deltaTime
+        );
+
+        totem.updateAnimation(
+            deltaTime
+        );
+
+        portal.updateAnimation(
+            deltaTime
+        );
+
+
+        // Render objects
+        portal.render(
+            renderer
+        );
+
+        totem.render(
+            renderer
+        );
+
+        enemySkull.render(
+            renderer
+        );
+
+
+        // Render remote players
         {
             std::lock_guard<std::mutex> lock(
                 sharedData.playerMutex
             );
 
-            for (const auto& entry : sharedData.remotePlayers) {
+            for (
+                const auto& entry :
+                sharedData.remotePlayers
+            ) {
 
                 const RemotePlayerState& remote =
                     entry.second;
+
 
                 Entity remotePlayer(
                     remote.x,
@@ -516,45 +837,89 @@ int main(int argc, char *argv[])
                     player.getHeight()
                 );
 
-                remotePlayer.setTexture(playerTexture);
-                remotePlayer.setSpriteSheet(8, 128, 128);
-                remotePlayer.render(renderer);
+
+                remotePlayer.setTexture(
+                    playerTexture
+                );
+
+                remotePlayer.setSpriteSheet(
+                    8,
+                    128,
+                    128
+                );
+
+                remotePlayer.render(
+                    renderer
+                );
             }
         }
-        player.render(renderer);
 
-        // Show the frame
-        SDL_RenderPresent(renderer);
+
+        // Render local player
+        player.render(
+            renderer
+        );
+
+
+        SDL_RenderPresent(
+            renderer
+        );
     }
 
-    // Clean up
+
+    // Cleanup textures
     if (playerTexture) {
-        SDL_DestroyTexture(playerTexture);
-    }
-    if (brickTexture) {
-        SDL_DestroyTexture(brickTexture);
-    }
-    if (totemTexture) {
-        SDL_DestroyTexture(totemTexture);
-    }
-    if (skullTexture) {
-        SDL_DestroyTexture(skullTexture);
-    }
-    if (portalTexture) {
-        SDL_DestroyTexture(portalTexture);
+        SDL_DestroyTexture(
+            playerTexture
+        );
     }
 
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
+    if (brickTexture) {
+        SDL_DestroyTexture(
+            brickTexture
+        );
+    }
+
+    if (totemTexture) {
+        SDL_DestroyTexture(
+            totemTexture
+        );
+    }
+
+    if (skullTexture) {
+        SDL_DestroyTexture(
+            skullTexture
+        );
+    }
+
+    if (portalTexture) {
+        SDL_DestroyTexture(
+            portalTexture
+        );
+    }
+
+
+    SDL_DestroyRenderer(
+        renderer
+    );
+
+    SDL_DestroyWindow(
+        window
+    );
+
 
     // Tell networking thread to stop
-    sharedData.running.store(false);
+    sharedData.running.store(
+        false
+    );
 
-    // Wait for networking thread to finish
+
+    // Wait for networking thread
     if (networkThread.joinable()) {
         networkThread.join();
     }
-    
+
+
     SDL_Quit();
 
     return 0;

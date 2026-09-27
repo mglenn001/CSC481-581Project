@@ -18,6 +18,12 @@ struct SharedData {
     float playerX = 0.0f;
     float playerY = 0.0f;
 
+    // Current timeline/game speed for this client
+    // 0.5 = half speed
+    // 1.0 = normal speed
+    // 2.0 = double speed
+    std::atomic<double> timeScale{1.0};
+
     // Positions received from the server
     std::unordered_map<int, RemotePlayerState> remotePlayers;
 
