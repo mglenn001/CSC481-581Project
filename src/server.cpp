@@ -289,6 +289,25 @@ void clientHandler(
             output.str();
 
 
+        // TEMP DEBUG (Section 4 platform troubleshooting):
+        // print the very first reply sent to each client so we
+        // can see exactly what's in it.
+        static std::mutex debugPrintMutex;
+        static std::unordered_map<int, bool> debugPrinted;
+        {
+            std::lock_guard<std::mutex> lock(debugPrintMutex);
+            if (!debugPrinted[assignedClientID]) {
+                std::cout
+                    << "[DEBUG] first reply to thread "
+                    << assignedClientID
+                    << ": "
+                    << replyString
+                    << std::endl;
+                debugPrinted[assignedClientID] = true;
+            }
+        }
+
+
         // Reply only to this client.
         responder.send(
             zmq::buffer(replyString),
