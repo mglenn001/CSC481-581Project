@@ -22,9 +22,13 @@
 // The platform patrols horizontally across the ground gap
 // (see GAP_START/GAP_END in main.cpp). These mirror that gap
 // assuming the default 1920x1080 window.
+//
+// PLATFORM_Y is kept well above the enemy skull's patrol
+// height (skull occupies roughly y=780-812) so jumping for
+// the platform doesn't land the player in the skull's hitbox.
 #define PLATFORM_MIN_X 890.0f
 #define PLATFORM_MAX_X 1060.0f
-#define PLATFORM_Y 750.0f
+#define PLATFORM_Y 630.0f
 #define PLATFORM_SPEED 120.0f
 
 struct PlayerState {
@@ -287,25 +291,6 @@ void clientHandler(
 
         std::string replyString =
             output.str();
-
-
-        // TEMP DEBUG (Section 4 platform troubleshooting):
-        // print the very first reply sent to each client so we
-        // can see exactly what's in it.
-        static std::mutex debugPrintMutex;
-        static std::unordered_map<int, bool> debugPrinted;
-        {
-            std::lock_guard<std::mutex> lock(debugPrintMutex);
-            if (!debugPrinted[assignedClientID]) {
-                std::cout
-                    << "[DEBUG] first reply to thread "
-                    << assignedClientID
-                    << ": "
-                    << replyString
-                    << std::endl;
-                debugPrinted[assignedClientID] = true;
-            }
-        }
 
 
         // Reply only to this client.

@@ -154,7 +154,7 @@ int main(int argc, char *argv[])
 
     Entity platform(
         GAP_START,
-        GROUND_Y - 180.0f,
+        GROUND_Y - 300.0f,
         PLATFORM_WIDTH,
         PLATFORM_HEIGHT
     );
