@@ -8,40 +8,85 @@
 #include <iostream>
 #include <cstring>
 
+#define BASE_PORT 5555
+
 void networkingThread(
     SharedData& sharedData,
     int clientID
 ) {
     try {
         zmq::context_t context(1);
-        zmq::socket_t requester(context, zmq::socket_type::req);
 
-        // Prevent shutdown from hanging for a long time
-        requester.set(zmq::sockopt::linger, 0);
+        zmq::socket_t requester(
+            context,
+            zmq::socket_type::req
+        );
 
-        requester.connect("tcp://localhost:5555");
+        // Prevent shutdown from hanging
+        requester.set(
+            zmq::sockopt::linger,
+            0
+        );
+
+        /*
+         * Each client connects to its own dedicated
+         * server thread/port.
+         *
+         * Client 1 -> 5556
+         * Client 2 -> 5557
+         * Client 3 -> 5558
+         */
+        int port =
+            BASE_PORT + clientID;
+
+        std::string address =
+            "tcp://localhost:"
+            + std::to_string(port);
+
+        requester.connect(address);
 
         std::cout
             << "Client " << clientID
             << " networking thread started."
             << std::endl;
 
+        std::cout
+            << "Client " << clientID
+            << " connected to server port "
+            << port
+            << "."
+            << std::endl;
+
+
         while (sharedData.running.load()) {
 
             float localX;
             float localY;
 
-            // Safely read the local player's position
+            /*
+             * Safely read the local player's
+             * latest position.
+             */
             {
                 std::lock_guard<std::mutex> lock(
                     sharedData.playerMutex
                 );
 
-                localX = sharedData.playerX;
-                localY = sharedData.playerY;
+                localX =
+                    sharedData.playerX;
+
+                localY =
+                    sharedData.playerY;
             }
 
-            // Send local position
+
+            /*
+             * Send this client's current position.
+             *
+             * Format:
+             *
+             * clientID x y
+             */
             std::ostringstream requestStream;
 
             requestStream
@@ -51,6 +96,7 @@ void networkingThread(
 
             std::string requestString =
                 requestStream.str();
+
 
             zmq::message_t request(
                 requestString.size()
@@ -62,33 +108,60 @@ void networkingThread(
                 requestString.size()
             );
 
+
             requester.send(
                 request,
                 zmq::send_flags::none
             );
 
-            // Receive positions from server
+
+            /*
+             * Wait for this client's dedicated
+             * server thread to reply.
+             */
             zmq::message_t reply;
 
-            auto result = requester.recv(
-                reply,
-                zmq::recv_flags::none
-            );
+            auto result =
+                requester.recv(
+                    reply,
+                    zmq::recv_flags::none
+                );
 
             if (!result) {
                 continue;
             }
 
+
             std::string replyString(
-                static_cast<char*>(reply.data()),
+                static_cast<char*>(
+                    reply.data()
+                ),
                 reply.size()
             );
 
-            std::unordered_map<int, RemotePlayerState>
-                updatedRemotePlayers;
 
-            std::stringstream playerStream(replyString);
+            /*
+             * Parse all player positions
+             * returned by the server.
+             */
+            std::unordered_map<
+                int,
+                RemotePlayerState
+            > updatedRemotePlayers;
+
+            // Server-authoritative platform position parsed
+            // out of this same reply (reserved ID 0).
+            float updatedPlatformX = 0.0f;
+            float updatedPlatformY = 0.0f;
+            bool receivedPlatformUpdate = false;
+
+
+            std::stringstream playerStream(
+                replyString
+            );
+
             std::string playerEntry;
+
 
             while (
                 std::getline(
@@ -97,9 +170,11 @@ void networkingThread(
                     ';'
                 )
             ) {
+
                 if (playerEntry.empty()) {
                     continue;
                 }
+
 
                 std::stringstream entryStream(
                     playerEntry
@@ -109,14 +184,32 @@ void networkingThread(
                 float remoteX;
                 float remoteY;
 
+
                 if (
                     entryStream
                     >> remoteID
                     >> remoteX
                     >> remoteY
                 ) {
-                    if (remoteID != clientID) {
-                        updatedRemotePlayers[remoteID] = {
+
+                    // Reserved ID 0: this is the server-
+                    // authoritative platform, not a player.
+                    if (remoteID == 0) {
+
+                        updatedPlatformX = remoteX;
+                        updatedPlatformY = remoteY;
+                        receivedPlatformUpdate = true;
+                    }
+                    /*
+                     * Don't store this client's
+                     * own position as a remote
+                     * player.
+                     */
+                    else if (remoteID != clientID) {
+
+                        updatedRemotePlayers[
+                            remoteID
+                        ] = {
                             remoteX,
                             remoteY
                         };
@@ -124,7 +217,11 @@ void networkingThread(
                 }
             }
 
-            // Safely update shared remote player data
+
+            /*
+             * Safely update the remote player
+             * data used by the main/render thread.
+             */
             {
                 std::lock_guard<std::mutex> lock(
                     sharedData.playerMutex
@@ -132,21 +229,57 @@ void networkingThread(
 
                 sharedData.remotePlayers =
                     updatedRemotePlayers;
+
+                if (receivedPlatformUpdate) {
+                    sharedData.platformX = updatedPlatformX;
+                    sharedData.platformY = updatedPlatformY;
+                }
             }
 
-            // Don't flood the server unnecessarily
+
+            /*
+             * Section 4: Asynchronicity
+             *
+             * The communication rate for this
+             * client depends on its own Timeline
+             * scale.
+             *
+             * 0.5x -> about 32 ms
+             * 1.0x -> about 16 ms
+             * 2.0x -> about 8 ms
+             *
+             * Each client has a dedicated server
+             * communication thread, so changing
+             * one client's rate does not slow
+             * down or speed up the others.
+             */
+            double scale =
+                sharedData.timeScale.load();
+
+            int sleepMilliseconds =
+                static_cast<int>(
+                    16.0 / scale
+                );
+
             std::this_thread::sleep_for(
-                std::chrono::milliseconds(16)
+                std::chrono::milliseconds(
+                    sleepMilliseconds
+                )
             );
         }
+
 
         requester.close();
         context.close();
     }
     catch (const zmq::error_t& e) {
+
         if (sharedData.running.load()) {
+
             std::cerr
-                << "Networking error: "
+                << "Networking error for client "
+                << clientID
+                << ": "
                 << e.what()
                 << std::endl;
         }
