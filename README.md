@@ -72,12 +72,44 @@ make
 
 ----------
 
-### 5. Run the animation
+### 5. Run the program
+
+#### On the **first terminal**:
 
 ```bash
-./main
+./server
 
 ```
 
-You should see a ran successfully in the console.
+#### On the **second terminal**:
 
+```bash
+./main 1
+
+```
+
+#### On the **third terminal**:
+
+```bash
+./main 2
+
+```
+
+#### On the **fourth terminal**:
+
+```bash
+./main 3
+
+```
+
+You should see client/server running in the console and Game Engine window(s) open.
+
+## Game Control
+
+* **A** — Move Left
+* **D** — Move Right
+* **W** — Jump
+* **Shift** — Hold to Run
+* **T** — Toggle Resolution Scaling (Proportional vs. Pixel)
+* **P** — Pause / Unpause
+* **+ / -** — Increase / Decrease game speed
