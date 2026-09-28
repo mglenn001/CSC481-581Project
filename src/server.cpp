@@ -31,17 +31,6 @@
 #define PLATFORM_Y 630.0f
 #define PLATFORM_SPEED 120.0f
 
-struct PlayerState {
-    float x;
-    float y;
-};
-
-// Shared player information for all server threads
-std::unordered_map<int, PlayerState> players;
-
-// Protects the shared player map
-std::mutex playersMutex;
-
 // Server-authoritative platform position.
 // Moved only by platformThread() below, driven by real wall-clock
 // time. No client input can change it, so it is identical for
@@ -51,6 +40,8 @@ struct PlatformState {
     float y;
 };
 
+// Server-controlled platform.
+// The platform is shared by all clients.
 PlatformState platformState{PLATFORM_MIN_X, PLATFORM_Y};
 std::mutex platformMutex;
 
@@ -130,11 +121,6 @@ void clientHandler(
         << "..."
         << std::endl;
 
-
-    bool hasReportedPosition = false;
-    PlayerState lastReportedPosition{0.0f, 0.0f};
-
-
     while (true) {
 
         // Wait for this client's next update
@@ -180,105 +166,22 @@ void clientHandler(
             continue;
         }
 
-
         /*
-         * Update the shared player state.
-         *
-         * Multiple client threads may access the player map
-         * simultaneously, so this section is protected by
-         * a mutex.
+         * The server does not store the player's
+         * position anymore.
+         * Player positions are sent directly
+         * between clients for Section 5.
          */
-        {
-            std::lock_guard<std::mutex> lock(
-                playersMutex
-            );
-
-            players[clientID] = {
-                x,
-                y
-            };
-        }
-
-
-        // Keep terminal output readable.
-        if (!hasReportedPosition) {
-
-            std::cout
-                << "Client " << clientID
-                << " connected on server thread "
-                << assignedClientID
-                << " at position: ("
-                << x << ", " << y << ")"
-                << std::endl;
-
-            lastReportedPosition = {
-                x,
-                y
-            };
-
-            hasReportedPosition = true;
-        }
-        else {
-
-            float changeX =
-                x - lastReportedPosition.x;
-
-            float changeY =
-                y - lastReportedPosition.y;
-
-
-            if (
-                changeX >= 50.0f ||
-                changeX <= -50.0f ||
-                changeY >= 50.0f ||
-                changeY <= -50.0f
-            ) {
-
-                std::cout
-                    << "Client " << clientID
-                    << " moved to: ("
-                    << x << ", " << y << ")"
-                    << std::endl;
-
-                lastReportedPosition = {
-                    x,
-                    y
-                };
-            }
-        }
 
 
         /*
-         * Create a snapshot of all player states.
-         *
+         * Send the server-controlled platform.
          * Format:
          *
-         * ID1 x y;ID2 x y;ID3 x y;
+         * 0 platformX platformY;
          */
         std::ostringstream output;
 
-        {
-            std::lock_guard<std::mutex> lock(
-                playersMutex
-            );
-
-            for (const auto& entry : players) {
-
-                output
-                    << entry.first << " "
-                    << entry.second.x << " "
-                    << entry.second.y << ";";
-            }
-        }
-
-
-        /*
-         * Append the server-authoritative platform position
-         * using the reserved PLATFORM_ID. This is the same
-         * position for every client's reply, because it only
-         * ever comes from platformThread()'s real-time loop,
-         * never from any client's own message rate/Timeline.
-         */
         {
             std::lock_guard<std::mutex> lock(platformMutex);
 
@@ -314,7 +217,7 @@ int main()
 
 
     std::cout
-        << "Asynchronous game server starting..."
+        << "Hybrid peer-to-peer game server starting..."
         << std::endl;
 
     std::cout
