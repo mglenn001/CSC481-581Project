@@ -54,19 +54,16 @@ void platformThread()
     auto lastTick = std::chrono::steady_clock::now();
 
     while (true) {
-
         auto now = std::chrono::steady_clock::now();
 
-        float realDeltaTime =
-            std::chrono::duration<float>(now - lastTick).count();
+        float realDeltaTime = std::chrono::duration<float>(now - lastTick).count();
 
         lastTick = now;
 
         {
             std::lock_guard<std::mutex> lock(platformMutex);
 
-            platformState.x +=
-                PLATFORM_SPEED * direction * realDeltaTime;
+            platformState.x += PLATFORM_SPEED * direction * realDeltaTime;
 
             if (platformState.x >= PLATFORM_MAX_X) {
                 platformState.x = PLATFORM_MAX_X;
@@ -79,9 +76,7 @@ void platformThread()
             }
         }
 
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(16)
-        );
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 }
 
@@ -96,51 +91,30 @@ void platformThread()
  * This allows one client to communicate at a different rate
  * without blocking the other clients.
  */
-void clientHandler(
-    zmq::context_t& context,
-    int assignedClientID
-) {
+void clientHandler(zmq::context_t& context,int assignedClientID)
+{
     // Each thread owns its own ZeroMQ socket.
     // ZeroMQ sockets should not be shared between threads.
-    zmq::socket_t responder(
-        context,
-        zmq::socket_type::rep
-    );
+    zmq::socket_t responder(context,zmq::socket_type::rep);
 
     int port = BASE_PORT + assignedClientID;
 
-    std::string address =
-        "tcp://*:" + std::to_string(port);
-
+    std::string address = "tcp://*:" + std::to_string(port);
     responder.bind(address);
 
-    std::cout
-        << "[Server Thread " << assignedClientID
-        << "] Listening on port "
-        << port
-        << "..."
-        << std::endl;
+    std::cout << "[Server Thread " << assignedClientID << "] Listening on port " << port << "..." << std::endl;
 
     while (true) {
-
         // Wait for this client's next update
         zmq::message_t request;
 
-        auto result = responder.recv(
-            request,
-            zmq::recv_flags::none
-        );
+        auto result = responder.recv(request,zmq::recv_flags::none);
 
         if (!result) {
             continue;
         }
 
-
-        std::string requestString(
-            static_cast<char*>(request.data()),
-            request.size()
-        );
-
+        std::string requestString(static_cast<char*>(request.data()),request.size());
 
         /*
          * Expected message:
@@ -154,15 +128,9 @@ void clientHandler(
         float y;
 
         if (!(input >> clientID >> x >> y)) {
-
             // REP sockets must still send a reply
             std::string errorReply = "ERROR";
-
-            responder.send(
-                zmq::buffer(errorReply),
-                zmq::send_flags::none
-            );
-
+            responder.send(zmq::buffer(errorReply),zmq::send_flags::none);
             continue;
         }
 
@@ -172,7 +140,6 @@ void clientHandler(
          * Player positions are sent directly
          * between clients for Section 5.
          */
-
 
         /*
          * Send the server-controlled platform.
@@ -184,26 +151,15 @@ void clientHandler(
 
         {
             std::lock_guard<std::mutex> lock(platformMutex);
-
-            output
-                << PLATFORM_ID << " "
-                << platformState.x << " "
-                << platformState.y << ";";
+            output << PLATFORM_ID << " " << platformState.x << " " << platformState.y << ";";
         }
 
-
-        std::string replyString =
-            output.str();
-
+        std::string replyString = output.str();
 
         // Reply only to this client.
-        responder.send(
-            zmq::buffer(replyString),
-            zmq::send_flags::none
-        );
+        responder.send(zmq::buffer(replyString),zmq::send_flags::none);
     }
 }
-
 
 int main()
 {
@@ -211,42 +167,21 @@ int main()
      * One ZeroMQ context can be shared between threads,
      * but each thread creates and owns its own socket.
      */
-    zmq::context_t context(
-        ZMQ_IO_THREADS
-    );
+    zmq::context_t context(ZMQ_IO_THREADS);
 
+    std::cout << "Peer-to-peer game server starting..." << std::endl;
 
-    std::cout
-        << "Hybrid peer-to-peer game server starting..."
-        << std::endl;
-
-    std::cout
-        << "Creating dedicated server threads for "
-        << MAX_CLIENTS
-        << " clients."
-        << std::endl;
-
+    std::cout << "Creating dedicated server threads for " << MAX_CLIENTS << " clients." << std::endl;
 
     std::vector<std::thread> clientThreads;
-
 
     /*
      * Create one dedicated communication thread
      * for every supported client.
      */
-    for (
-        int clientID = 1;
-        clientID <= MAX_CLIENTS;
-        clientID++
-    ) {
-
-        clientThreads.emplace_back(
-            clientHandler,
-            std::ref(context),
-            clientID
-        );
+    for (int clientID = 1; clientID <= MAX_CLIENTS; clientID++) {
+        clientThreads.emplace_back(clientHandler,std::ref(context),clientID);
     }
-
 
     /*
      * Start the platform's own thread. It never talks to any
@@ -255,7 +190,6 @@ int main()
      */
     std::thread platformThreadHandle(platformThread);
 
-
     /*
      * Keep the server alive.
      *
@@ -263,7 +197,6 @@ int main()
      * own synchronous REQ/REP communication.
      */
     for (auto& thread : clientThreads) {
-
         if (thread.joinable()) {
             thread.join();
         }
@@ -272,7 +205,6 @@ int main()
     if (platformThreadHandle.joinable()) {
         platformThreadHandle.join();
     }
-
 
     return 0;
 }
