@@ -1,12 +1,16 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3_image/SDL_image.h>
+#include <thread>
 
 #include "Entity.h"
 #include "Physics.h"
 #include "Input.h"
 #include "Collision.h"
 #include "Scaling.h"
+#include "Timeline.h"
+#include "SharedData.h"
+#include "Networking.h"
 
 const int WINDOW_WIDTH = 1920;
 const int WINDOW_HEIGHT = 1080;
@@ -26,8 +30,22 @@ const int TOTEM_FRAME_COUNT = 8;
 const int TOTEM_FRAME_W = 64;
 const int TOTEM_FRAME_H = 192;
 
+
 int main(int argc, char *argv[])
 {
+
+    // Each game client must have its own ID.
+    // Example: ./main 1 ./main 2 ./main 3
+    if (argc < 2) {
+        SDL_Log("Usage: ./main <clientID>");
+        return 1;
+    }
+
+    int clientID = std::stoi(argv[1]);
+
+    SDL_Log("Starting client %d", clientID);
+
+
     // Initialize SDL
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         SDL_Log("Could not initialize SDL: %s", SDL_GetError());
@@ -160,10 +178,39 @@ int main(int argc, char *argv[])
         portal.setAnimationSpeed(6.0f);
     }
 
+
+    // Shared data between the game loop and networking thread
+    SharedData sharedData;
+
+    sharedData.playerX = player.getX();
+    sharedData.playerY = player.getY();
+
+    // Start networking in its own thread
+    std::thread networkThread(
+        networkingThread,
+        std::ref(sharedData),
+        clientID
+    );
+
+    SDL_Log(
+        "Client %d networking thread created",
+        clientID
+    );
+
+
     bool running = true;
     SDL_Event event;
 
-    Uint64 lastTime = SDL_GetTicks();
+    // Uint64 lastTime = SDL_GetTicks();
+    // game timeline anchored to real time
+    Timeline gameTime;
+
+    // used so one key press only trigger once
+    bool pauseKeyWasPressed = false;
+    bool minusKeyWasPressed = false;
+    bool plusKeyWasPressed = false;
+
+
     // Main game loop
     while (running) {
 
@@ -174,9 +221,8 @@ int main(int argc, char *argv[])
             }
         }
 
-        Uint64 currentTime = SDL_GetTicks();
-        float deltaTime = (currentTime - lastTime) / 1000.0f;
-        lastTime = currentTime;
+        // Get elapsed game time from the timeline
+        float deltaTime = static_cast<float>(gameTime.getDeltaTime());
 
         // A: walk left
         // D: walk right
@@ -187,6 +233,71 @@ int main(int argc, char *argv[])
         // W + D: jump right
         // Shift + A: run left
         // Shift + D: run right
+        // P: Pause / unpause game time
+        // - = Decrease game speed
+        // + = Increase game speed
+
+        // P: Pause / unpause game time
+        bool pauseKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_P);
+        if (pauseKeyIsPressed && !pauseKeyWasPressed) {
+            if (gameTime.isPaused()) {
+                gameTime.unpause();
+                SDL_Log("Game resumes");
+            } else {
+                gameTime.pause();
+                SDL_Log("Game paused");
+            }
+        }
+        pauseKeyWasPressed = pauseKeyIsPressed;
+
+        // cycle game speed
+        // - = Decrease game speed
+        // + = Increase game speed
+        bool minusKeyIsPressed =
+            Input::isKeyPressed(SDL_SCANCODE_MINUS);
+
+        bool plusKeyIsPressed =
+            Input::isKeyPressed(SDL_SCANCODE_EQUALS);
+
+        // Decrease speed: 2.0x -> 1.0x -> 0.5x
+        if (minusKeyIsPressed && !minusKeyWasPressed) {
+
+            double currentScale = gameTime.getScale();
+
+            if (currentScale == 2.0) {
+                gameTime.setScale(1.0);
+            }
+            else if (currentScale == 1.0) {
+                gameTime.setScale(0.5);
+            }
+
+            SDL_Log(
+                "Game time scale: %.1fx",
+                gameTime.getScale()
+            );
+        }
+
+        // Increase speed: 0.5x -> 1.0x -> 2.0x
+        if (plusKeyIsPressed && !plusKeyWasPressed) {
+
+            double currentScale = gameTime.getScale();
+
+            if (currentScale == 0.5) {
+                gameTime.setScale(1.0);
+            }
+            else if (currentScale == 1.0) {
+                gameTime.setScale(2.0);
+            }
+
+            SDL_Log(
+                "Game time scale: %.1fx",
+                gameTime.getScale()
+            );
+        }
+
+        minusKeyWasPressed = minusKeyIsPressed;
+        plusKeyWasPressed = plusKeyIsPressed;
+
 
         // Toggle scaling mode with the T key
         bool scaleKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_T);
@@ -199,37 +310,39 @@ int main(int argc, char *argv[])
         }
         scaleKeyWasPressed = scaleKeyIsPressed;
 
-        // Input for Jumping (W key)
-        if (Input::isKeyPressed(SDL_SCANCODE_W)) {
-            physics.jump(player, 650.0f);
-        }
-
         const float WALK_SPEED = 300.0f;
         const float RUN_SPEED = 550.0f;
         float moveSpeed = WALK_SPEED;
 
-        // Input for moving left and right (A and D keys)
         if (Input::isKeyPressed(SDL_SCANCODE_LSHIFT) ||
             Input::isKeyPressed(SDL_SCANCODE_RSHIFT)) {
             moveSpeed = RUN_SPEED;
         }
 
-        if (Input::isKeyPressed(SDL_SCANCODE_A)) {
-            player.move(-moveSpeed * deltaTime, 0.0f);
-        }
+        if (!gameTime.isPaused()) { 
+            // Input for Jumping (W key)
+            if (Input::isKeyPressed(SDL_SCANCODE_W)) {
+                physics.jump(player, 650.0f);
+            }
 
-        if (Input::isKeyPressed(SDL_SCANCODE_D)) {
-            player.move(moveSpeed * deltaTime, 0.0f);
-        }
+            // Input for moving left and right (A and D keys)
+            if (Input::isKeyPressed(SDL_SCANCODE_A)) {
+                player.move(-moveSpeed * deltaTime, 0.0f);
+            }
 
-        // Input for crouching (S key)
-        if (Input::isKeyPressed(SDL_SCANCODE_S)) {
-            SDL_Log("S pressed - down/crouch action");
-        }
+            if (Input::isKeyPressed(SDL_SCANCODE_D)) {
+                player.move(moveSpeed * deltaTime, 0.0f);
+            }
 
-        // Input for attacking (Space key)
-        if (Input::isKeyPressed(SDL_SCANCODE_SPACE)) {
-            SDL_Log("Attack!");
+            // Input for crouching (S key)
+            if (Input::isKeyPressed(SDL_SCANCODE_S)) {
+                SDL_Log("S pressed - crouch action");
+            }
+
+            // Input for attacking (Space key)
+            if (Input::isKeyPressed(SDL_SCANCODE_SPACE)) {
+                SDL_Log("Attack!");
+            }
         }
 
         // Update physics
@@ -307,6 +420,17 @@ int main(int argc, char *argv[])
             player.setGrounded(true);
         }
 
+
+        // Share this player's latest position with the networking thread
+        {
+            std::lock_guard<std::mutex> lock(
+                sharedData.playerMutex
+            );
+
+            sharedData.playerX = player.getX();
+            sharedData.playerY = player.getY();
+        }
+
         // Enemy patrol movement
         enemySkull.move(skullSpeed * skullDirection * deltaTime, 0.0f);
         if (enemySkull.getX() >= skullPatrolMaxX) {
@@ -374,6 +498,29 @@ int main(int argc, char *argv[])
         portal.render(renderer);
         totem.render(renderer);
         enemySkull.render(renderer);
+        // Render characters controlled by the other clients.
+        {
+            std::lock_guard<std::mutex> lock(
+                sharedData.playerMutex
+            );
+
+            for (const auto& entry : sharedData.remotePlayers) {
+
+                const RemotePlayerState& remote =
+                    entry.second;
+
+                Entity remotePlayer(
+                    remote.x,
+                    remote.y,
+                    player.getWidth(),
+                    player.getHeight()
+                );
+
+                remotePlayer.setTexture(playerTexture);
+                remotePlayer.setSpriteSheet(8, 128, 128);
+                remotePlayer.render(renderer);
+            }
+        }
         player.render(renderer);
 
         // Show the frame
@@ -399,6 +546,15 @@ int main(int argc, char *argv[])
 
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
+
+    // Tell networking thread to stop
+    sharedData.running.store(false);
+
+    // Wait for networking thread to finish
+    if (networkThread.joinable()) {
+        networkThread.join();
+    }
+    
     SDL_Quit();
 
     return 0;
