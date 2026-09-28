@@ -80,6 +80,8 @@ void platformThread()
     }
 }
 
+// Global mutex to protect terminal prints
+std::mutex coutMutex;
 
 /*
  * Each client gets its own server thread and its own REP socket.
@@ -102,7 +104,11 @@ void clientHandler(zmq::context_t& context,int assignedClientID)
     std::string address = "tcp://*:" + std::to_string(port);
     responder.bind(address);
 
-    std::cout << "[Server Thread " << assignedClientID << "] Listening on port " << port << "..." << std::endl;
+    // Lock std::cout so thread output prints cleanly on a single line
+    {
+        std::lock_guard<std::mutex> lock(coutMutex);
+        std::cout << "[Server Thread " << assignedClientID << "] Listening on port " << port << "..." << std::endl;
+    }
 
     while (true) {
         // Wait for this client's next update
