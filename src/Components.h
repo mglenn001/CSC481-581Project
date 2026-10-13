@@ -70,8 +70,11 @@ enum class NetworkAuthority {
     Local,              // this client owns it and sends its own state
     RemoteAuthoritative,// server owns it (e.g. the moving platform);
                          // clients only ever receive and render it
-    RemoteMirrored       // another client owns it; this client only
+    RemoteMirrored,      // another client owns it; this client only
                          // ever receives and renders it (other players)
+    Deterministic        // nothing is sent: every peer computes it the
+                         // same way from shared wall-clock time (the
+                         // sine-wave moving platform)
 };
 
 struct NetworkComponent : public Component {

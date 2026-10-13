@@ -19,7 +19,8 @@ inline GameObject makePlayer(int clientId, float x, float y, float w, float h)
     return obj;
 }
 
-// Moving platform: no gravity or velocity, position comes from the server.
+// Moving platform: no gravity or velocity. Every peer computes its position
+// from the same wall-clock sine wave, so nothing needs to be sent.
 inline GameObject makePlatform(float x, float y, float w, float h)
 {
     GameObject obj("platform", 0);
@@ -28,7 +29,7 @@ inline GameObject makePlatform(float x, float y, float w, float h)
     obj.addComponent<CollidableComponent>();
     auto& net = obj.addComponent<NetworkComponent>();
     net.networkId = 0;
-    net.authority = NetworkAuthority::RemoteAuthoritative;
+    net.authority = NetworkAuthority::Deterministic;
     return obj;
 }
 

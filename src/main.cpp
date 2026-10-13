@@ -158,18 +158,16 @@ int main(int argc, char *argv[])
     const float PLATFORM_WIDTH = 150.0f;
     const float PLATFORM_HEIGHT = 40.0f;
 
-    Entity platform(
+    GameObject platform = makePlatform(
         600.0f,
         GROUND_Y - 200.0f,
         PLATFORM_WIDTH,
         PLATFORM_HEIGHT
     );
 
-    platform.setGravityEnabled(false);
-
     // Tracks the platform's previous X so the player can be
     // carried along by however far it moved this frame.
-    float previousPlatformX = platform.getX();
+    float previousPlatformX = go::getX(platform);
 
 
     // Load the player's sprite texture
@@ -417,19 +415,19 @@ int main(int argc, char *argv[])
 
         float platformDeltaX = newPlatformX - previousPlatformX;
 
-        platform.setPosition(newPlatformX, newPlatformY);
+        go::setPosition(platform, newPlatformX, newPlatformY);
 
         previousPlatformX = newPlatformX;
 
         // Platform collision: stand on top of it and get
         // carried along as it moves.
-        bool horizontallyOverPlatform = playerRight > platform.getX() && playerLeft < platform.getX() + platform.getWidth();
+        bool horizontallyOverPlatform = playerRight > go::getX(platform) && playerLeft < go::getX(platform) + go::getWidth(platform);
 
-        bool landingOnPlatform = go::getY(player) + go::getHeight(player) <= platform.getY() + 20.0f &&
-            go::getY(player) + go::getHeight(player) >= platform.getY() - 20.0f && go::getVelocityY(player) >= 0.0f;
+        bool landingOnPlatform = go::getY(player) + go::getHeight(player) <= go::getY(platform) + 20.0f &&
+            go::getY(player) + go::getHeight(player) >= go::getY(platform) - 20.0f && go::getVelocityY(player) >= 0.0f;
 
         if (horizontallyOverPlatform && landingOnPlatform) {
-            go::setPosition(player, go::getX(player) + platformDeltaX, platform.getY() - go::getHeight(player));
+            go::setPosition(player, go::getX(player) + platformDeltaX, go::getY(platform) - go::getHeight(player));
 
             go::setVelocityY(player, 0.0f);
             go::setGrounded(player, true);
@@ -540,13 +538,13 @@ int main(int argc, char *argv[])
         enemySkull.updateAnimation(deltaTime);
         totem.updateAnimation(deltaTime);
         portal.updateAnimation(deltaTime);
-        platform.updateAnimation(deltaTime);
+        go::updateAnimation(platform);
 
         // Render objects
         portal.render(renderer);
         totem.render(renderer);
         enemySkull.render(renderer);
-        platform.render(renderer);
+        go::render(platform, renderer);
 
         // Render positions received directly from remote peers
         {
