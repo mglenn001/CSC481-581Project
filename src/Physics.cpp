@@ -45,3 +45,33 @@ void Physics::jump(Entity& entity, float jumpStrength)
     entity.setVelocityY(-jumpStrength);
     entity.setGrounded(false);
 }
+
+void Physics::update(GameObject& obj, float deltaTime)
+{
+    auto* gravityComp = obj.getComponent<GravityComponent>();
+    auto* transform = obj.getComponent<TransformComponent>();
+    auto* velocity = obj.getComponent<VelocityComponent>();
+
+    // No gravity component (or nothing to move) means physics skips it
+    if (!gravityComp || !transform || !velocity) {
+        return;
+    }
+
+    velocity->vy += gravity * deltaTime;
+
+    transform->x += velocity->vx * deltaTime;
+    transform->y += velocity->vy * deltaTime;
+}
+
+void Physics::jump(GameObject& obj, float jumpStrength)
+{
+    auto* gravityComp = obj.getComponent<GravityComponent>();
+    auto* velocity = obj.getComponent<VelocityComponent>();
+
+    if (!gravityComp || !velocity || !gravityComp->grounded) {
+        return;
+    }
+
+    velocity->vy = -jumpStrength;
+    gravityComp->grounded = false;
+}
