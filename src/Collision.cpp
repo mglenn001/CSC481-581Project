@@ -26,3 +26,17 @@ bool Collision::checkCollision(const GameObject& a, const GameObject& b) {
     SDL_FRect rectB = { tb->x, tb->y, tb->width, tb->height };
     return SDL_HasRectIntersectionFloat(&rectA, &rectB);
 }
+
+
+bool Collision::checkCollision(const GameObject& a, const Entity& b) {
+    const auto* ta = a.getComponent<TransformComponent>();
+    const auto* ca = a.getComponent<CollidableComponent>();
+
+    if (!ta || !ca) {
+        return false;
+    }
+
+    SDL_FRect rectA = { ta->x, ta->y, ta->width, ta->height };
+    SDL_FRect rectB = { b.getX(), b.getY(), b.getWidth(), b.getHeight() };
+    return SDL_HasRectIntersectionFloat(&rectA, &rectB);
+}

@@ -11,6 +11,9 @@ public:
 
     // GameObject (component-based) version
     static bool checkCollision(const GameObject& a, const GameObject& b);
+
+    // Mixed: a GameObject against a not-yet-converted Entity
+    static bool checkCollision(const GameObject& a, const Entity& b);
 };
 
 #endif
