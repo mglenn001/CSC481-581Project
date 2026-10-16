@@ -1,49 +1,42 @@
 #pragma once
 
-// Milestone 3 Section C.1: Second data format for the performance comparison.
+// Milestone 3 Section C.1: Network formats (TEXT or BINARY) for performance comparison
 //
-// The engine can send a player's position to its peers in one of two ways.
-// Only the data REPRESENTATION changes. The gameplay and the P2P PUB/SUB
-// networking are identical for both formats.
-//
-//   TEXT   (original) : a string such as "2 640.5 300"
-//                       Built with ostringstream, parsed with stringstream.
-//   BINARY (new)      : a fixed-size raw struct (10 bytes), copied with memcpy.
-//                       No string formatting or parsing is needed.
+// Both formats use the same gameplay and networking logic, only the data representation changes.
 //
 // Choose a format when starting a client:
 //   ./main 1            -> TEXT   (default, same behavior as before)
 //   ./main 1 text       -> TEXT
 //   ./main 1 binary     -> BINARY
-//
-// Every receiver detects the format of each incoming message on its own
-// (see decode below), so clients using different formats can still talk to
-// each other. For fair experiments, run all clients with the same format.
 
 #include <cstdint>
 #include <cstring>
 #include <sstream>
 #include <string>
+#include <vector>
 
 enum class NetworkFormat {
     TEXT,
     BINARY
 };
 
+// Milestone 3 Sections C.2-C.4: Position of a moving object used in benchmarks.
+struct ObjectState {
+    float x;
+    float y;
+};
+static_assert(sizeof(ObjectState) == 8, "ObjectState must be 8 bytes (no padding)");
+
 namespace NetFormat {
 
-// First byte of every binary packet. It is not a printable ASCII character,
-// and text packets always start with a digit (the client ID), so the two
-// formats can never be confused with each other.
+// Magic byte to identify binary player packets
 constexpr uint8_t BINARY_MAGIC = 0xB1;
 
-// Raw layout of one binary packet.
-// pack(1) removes padding so the struct is exactly 10 bytes on the wire.
-// (Assumes all clients run on the same kind of machine, so byte order matches.)
+// Raw layout of a binary player packet (exactly 10 bytes)
 #pragma pack(push, 1)
 struct BinaryPlayerPacket {
-    uint8_t magic;     // always BINARY_MAGIC
-    uint8_t clientID;  // 1..4
+    uint8_t magic; // always BINARY_MAGIC
+    uint8_t clientID; // Client ID 1..4
     float   x;
     float   y;
 };
@@ -56,12 +49,12 @@ inline NetworkFormat parseFormat(const std::string& name) {
     return (name == "binary") ? NetworkFormat::BINARY : NetworkFormat::TEXT;
 }
 
-// Human-readable name, used for log messages.
+// Returns format name for logs
 inline const char* formatName(NetworkFormat format) {
     return (format == NetworkFormat::BINARY) ? "BINARY" : "TEXT";
 }
 
-// Turn (clientID, x, y) into the bytes that are sent over the network.
+// Turn (clientID, x, y) into the bytes that are sent over the network
 inline std::string encode(NetworkFormat format, int clientID, float x, float y) {
     if (format == NetworkFormat::BINARY) {
         BinaryPlayerPacket packet;
@@ -69,7 +62,7 @@ inline std::string encode(NetworkFormat format, int clientID, float x, float y) 
         packet.clientID = static_cast<uint8_t>(clientID);
         packet.x = x;
         packet.y = y;
-        // std::string can hold arbitrary bytes, so it works as a byte buffer.
+        // std::string can hold arbitrary bytes, so it works as a byte buffer
         return std::string(reinterpret_cast<const char*>(&packet), sizeof(packet));
     }
 
@@ -79,12 +72,11 @@ inline std::string encode(NetworkFormat format, int clientID, float x, float y) 
     return stream.str();
 }
 
-// Turn received bytes back into (clientID, x, y).
-// Detects the format from the data itself. Returns false if it is malformed.
+// Decodes received bytes back into client ID and position
 inline bool decode(const void* data, size_t size, int& clientID, float& x, float& y) {
     const uint8_t* bytes = static_cast<const uint8_t*>(data);
 
-    // BINARY: right size and starts with the magic byte.
+    // BINARY: Right size and starts with the magic byte.
     if (size == sizeof(BinaryPlayerPacket) && bytes[0] == BINARY_MAGIC) {
         BinaryPlayerPacket packet;
         std::memcpy(&packet, bytes, sizeof(packet));
@@ -94,9 +86,74 @@ inline bool decode(const void* data, size_t size, int& clientID, float& x, float
         return true;
     }
 
-    // TEXT: parse "id x y" (same parsing the original code used).
+    // TEXT: Parse "id x y" (same parsing the original code used).
     std::stringstream stream(std::string(static_cast<const char*>(data), size));
     return static_cast<bool>(stream >> clientID >> x >> y);
+}
+
+// Milestone 3 Sections C.2-C.4: Object snapshots for the performance experiments.
+//   TEXT   : "S <clientID> <count> x0 y0 x1 y1 ..."   (starts with the letter S)
+//   BINARY : 4-byte header (magic, clientID, uint16 count) + count * 8 raw bytes
+constexpr uint8_t BINARY_OBJECTS_MAGIC = 0xB2; // marks a binary object snapshot
+constexpr char TEXT_OBJECTS_PREFIX  = 'S'; // marks a text object snapshot
+
+// True if a received message is an object snapshot (not a single player position)
+inline bool isObjectMessage(const void* data, size_t size) {
+    if (size == 0) { return false; }
+    const uint8_t first = static_cast<const uint8_t*>(data)[0];
+    return first == BINARY_OBJECTS_MAGIC || first == static_cast<uint8_t>(TEXT_OBJECTS_PREFIX);
+}
+
+// Turn a list of objects into the bytes that are sent over the network
+inline std::string encodeObjects(NetworkFormat format, int clientID, const std::vector<ObjectState>& objects) {
+    if (format == NetworkFormat::BINARY) {
+        const uint16_t count = static_cast<uint16_t>(objects.size());
+        std::string message(4 + objects.size() * sizeof(ObjectState), '\0');
+        message[0] = static_cast<char>(BINARY_OBJECTS_MAGIC);
+        message[1] = static_cast<char>(clientID);
+        std::memcpy(&message[2], &count, sizeof(count));
+        // All objects are copied in one block, no per-object work
+        if (!objects.empty()) {
+            std::memcpy(&message[4], objects.data(), objects.size() * sizeof(ObjectState));
+        }
+        return message;
+    }
+
+    // TEXT: Every number is formatted into characters one by one.
+    std::ostringstream stream;
+    stream << TEXT_OBJECTS_PREFIX << " " << clientID << " " << objects.size();
+    for (const ObjectState& object : objects) {
+        stream << " " << object.x << " " << object.y;
+    }
+    return stream.str();
+}
+
+// Decodes network bytes into a list of objects
+inline bool decodeObjects(const void* data, size_t size, int& clientID, std::vector<ObjectState>& objects) {
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+
+    if (size >= 4 && bytes[0] == BINARY_OBJECTS_MAGIC) {
+        uint16_t count;
+        std::memcpy(&count, bytes + 2, sizeof(count));
+        if (size != 4 + static_cast<size_t>(count) * sizeof(ObjectState)) { return false; }
+        clientID = bytes[1];
+        objects.resize(count);
+        if (count > 0) {
+            std::memcpy(objects.data(), bytes + 4, count * sizeof(ObjectState));
+        }
+        return true;
+    }
+
+    // TEXT: Parse "S id count x y x y ..."
+    std::istringstream stream(std::string(static_cast<const char*>(data), size));
+    char prefix = 0;
+    size_t count = 0;
+    if (!(stream >> prefix >> clientID >> count) || prefix != TEXT_OBJECTS_PREFIX) { return false; }
+    objects.resize(count);
+    for (size_t i = 0; i < count; i++) {
+        if (!(stream >> objects[i].x >> objects[i].y)) { return false; }
+    }
+    return true;
 }
 
 } // namespace NetFormat
