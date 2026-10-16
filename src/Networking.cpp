@@ -10,7 +10,7 @@
 
 // Section 5: Ports used for direct peer-to-peer communication.
 #define PEER_BASE_PORT 6000
-#define TOTAL_PEERS 3
+#define TOTAL_PEERS 4
 
 void networkingThread(
     SharedData& sharedData,
@@ -23,7 +23,7 @@ void networkingThread(
         zmq::socket_t peerPublisher(context, zmq::socket_type::pub);
         peerPublisher.set(zmq::sockopt::linger,0);
 
-        // Section 5: Each client has its own peer port. Client 1 -> 6001, Client 2 -> 6002, and Client 3 -> 6003
+        // Section 5: Each client has its own peer port. Client 1 -> 6001, Client 2 -> 6002, and Client 3 -> 6003, Client 4 -> 6004
         int peerPort = PEER_BASE_PORT + clientID;
         std::string peerAddress = "tcp://*:" + std::to_string(peerPort);
         peerPublisher.bind(peerAddress);
@@ -35,7 +35,7 @@ void networkingThread(
         peerSubscriber.set(zmq::sockopt::subscribe,"");
 
         // Section 5: Connect to the other clients.
-        for (int peerID = 1; peerID <= 3; peerID++) {
+        for (int peerID = 1; peerID <= TOTAL_PEERS; peerID++) {
             if (peerID == clientID) { continue; } // skip connecting to self
         
             int otherPeerPort = PEER_BASE_PORT + peerID;
@@ -93,7 +93,9 @@ void networkingThread(
                     if (remoteID != clientID) {
                         // Thread-safe update of remote player position map
                         std::lock_guard<std::mutex> lock(sharedData.playerMutex);
-                        sharedData.remotePlayers[remoteID] = {remoteX,remoteY};
+                        if (remoteID >= 1 && remoteID <= TOTAL_PEERS) {
+                            sharedData.remotePlayers[remoteID] = {remoteX, remoteY, std::chrono::steady_clock::now()};
+                        }
                     }
                 }
             }
@@ -114,9 +116,23 @@ void networkingThread(
              * one client's rate does not slow
              * down or speed up the others.
              */
+            // PUB/SUB does not report peer disconnects. Expire stale players.
+            {
+                std::lock_guard<std::mutex> lock(sharedData.playerMutex);
+                const auto now = std::chrono::steady_clock::now();
+                for (auto it = sharedData.remotePlayers.begin(); it != sharedData.remotePlayers.end();) {
+                    if (now - it->second.lastSeen > std::chrono::seconds(2)) {
+                        std::cout << "Peer " << it->first << " disconnected (timeout)" << std::endl;
+                        it = sharedData.remotePlayers.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+
             double scale = sharedData.timeScale.load();
 
-            int sleepMilliseconds = static_cast<int>(16.0 / scale);
+            int sleepMilliseconds = static_cast<int>(16.0 / (scale > 0.0 ? scale : 1.0));
 
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepMilliseconds));
         }

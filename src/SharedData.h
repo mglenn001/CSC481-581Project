@@ -3,11 +3,13 @@
 #include <mutex>
 #include <unordered_map>
 #include <atomic>
+#include <chrono>
 
 // Structure holding location data for remote peers
 struct RemotePlayerState {
     float x;
     float y;
+        std::chrono::steady_clock::time_point lastSeen = std::chrono::steady_clock::now();
 };
 
 struct SharedData {
