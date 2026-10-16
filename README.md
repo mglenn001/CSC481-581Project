@@ -63,7 +63,7 @@ Then launch the MinGW64 shell and continue.
 
 > Graphs need matplotlib.
 
-#### In **Terminal**:
+#### In the **Terminal**:
 
 ```bash
 pip3 install matplotlib
@@ -118,7 +118,7 @@ You should see Game Engine window(s) open.
 
 ### 6. Run the experiments (from the build folder)
 
-#### On the **first terminal**:
+#### In the **terminal**:
 
 ```bash
 python3 ../experiments/run_experiments.py --quick      # short test, a few minutes
