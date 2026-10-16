@@ -44,18 +44,26 @@ int main(int argc, char *argv[])
 
     // Each game client must have its own ID.
     // Example: ./main 1 ./main 2 ./main 3
+    // Milestone 3 Section C.1: optional second argument picks the network data format.
+    // Example: ./main 1 binary
     if (argc < 2) {
-        SDL_Log("Usage: ./main <clientID>");
+        SDL_Log("Usage: ./main <clientID> [text|binary]");
         return 1;
     }
 
     int clientID = std::stoi(argv[1]);
 
+    // Default is TEXT (the original format). "binary" selects the raw-struct format.
+    NetworkFormat networkFormat = NetworkFormat::TEXT;
+    if (argc >= 3) {
+        networkFormat = NetFormat::parseFormat(argv[2]);
+    }
+
     if (clientID < 1 || clientID > 4) {
         SDL_Log("Client ID must be between 1 and 4");
         return 1;
     }
-    SDL_Log("Starting peer client %d", clientID);
+    SDL_Log("Starting peer client %d (network format: %s)", clientID, NetFormat::formatName(networkFormat));
 
     // Initialize SDL
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -234,6 +242,7 @@ int main(int argc, char *argv[])
 
     // Shared data between the game loop and networking thread
     SharedData sharedData;
+    sharedData.networkFormat = networkFormat;  // Section C.1: format used by the networking thread
     sharedData.playerX = go::getX(player);
     sharedData.playerY = go::getY(player);
 

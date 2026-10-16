@@ -46,7 +46,8 @@ void networkingThread(
         // Allow ZeroMQ time to establish P2P subscriptions across peers
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-        std::cout << "Peer " << clientID << " P2P networking thread started on port " << peerPort << std::endl;
+        std::cout << "Peer " << clientID << " P2P networking thread started on port " << peerPort
+                  << " (data format: " << NetFormat::formatName(sharedData.networkFormat) << ")" << std::endl;
 
         while (sharedData.running.load()) {
 
@@ -66,10 +67,9 @@ void networkingThread(
 
             // Section 5: Send this player's position directly to the other clients.
             // The server does not relay this data.
-            std::ostringstream peerStream;
-            peerStream << clientID << " " << localX << " " << localY;
-
-            std::string peerString = peerStream.str();
+            // Section C.1: encode() builds either the TEXT string or the BINARY
+            // struct, depending on the format chosen when the client was started.
+            std::string peerString = NetFormat::encode(sharedData.networkFormat, clientID, localX, localY);
             peerPublisher.send(zmq::buffer(peerString), zmq::send_flags::none);
 
             // Section 5: Non-blocking loop to receive messages from all other peers
@@ -82,14 +82,12 @@ void networkingThread(
                 // No more pending messages from peers
                 if (!peerResult) { break; }
 
-                std::string receivedString(static_cast<char*>(peerMessage.data()), peerMessage.size());
-                std::stringstream entryStream(receivedString);
-
                 int remoteID;
                 float remoteX;
                 float remoteY;
 
-                if (entryStream >> remoteID >> remoteX >> remoteY) {
+                // Section C.1: decode() detects TEXT vs BINARY from the message itself.
+                if (NetFormat::decode(peerMessage.data(), peerMessage.size(), remoteID, remoteX, remoteY)) {
                     if (remoteID != clientID) {
                         // Thread-safe update of remote player position map
                         std::lock_guard<std::mutex> lock(sharedData.playerMutex);
