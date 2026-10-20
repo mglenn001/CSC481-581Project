@@ -13,6 +13,8 @@
 #include "Timeline.h"
 #include "SharedData.h"
 #include "Networking.h"
+#include "GameObjectFactory.h"
+#include "GameObjectOps.h"
 
 const int WINDOW_WIDTH = 1920;
 const int WINDOW_HEIGHT = 1080;
@@ -102,17 +104,16 @@ int main(int argc, char *argv[])
     const float START_Y = 100.0f;
 
     // Create one generic entity
-    Entity player(START_X, START_Y, 200.0f, 200.0f);
+    GameObject player = makePlayer(clientID, START_X, START_Y, 200.0f, 200.0f);
 
     // Create a Physics instance
     Physics physics;
 
-    // Enable gravity for the player
-    player.setGravityEnabled(true);
+    // Gravity comes from the player having a GravityComponent
     physics.setGravity(900.0f);
 
     const float PORTAL_SPAWN_X = START_X;
-    const float PORTAL_SPAWN_Y = GROUND_Y - player.getHeight();
+    const float PORTAL_SPAWN_Y = GROUND_Y - go::getHeight(player);
 
     // Totem: static object, player must jump over it
     Entity totem(
@@ -157,18 +158,16 @@ int main(int argc, char *argv[])
     const float PLATFORM_WIDTH = 150.0f;
     const float PLATFORM_HEIGHT = 40.0f;
 
-    Entity platform(
+    GameObject platform = makePlatform(
         600.0f,
         GROUND_Y - 200.0f,
         PLATFORM_WIDTH,
         PLATFORM_HEIGHT
     );
 
-    platform.setGravityEnabled(false);
-
     // Tracks the platform's previous X so the player can be
     // carried along by however far it moved this frame.
-    float previousPlatformX = platform.getX();
+    float previousPlatformX = go::getX(platform);
 
 
     // Load the player's sprite texture
@@ -178,8 +177,8 @@ int main(int argc, char *argv[])
         SDL_Log("Could not load texture: %s",SDL_GetError());
     }
     else {
-        player.setTexture(playerTexture);
-        player.setSpriteSheet(8, 128, 128);
+        go::setTexture(player, playerTexture);
+        go::setSpriteSheet(player, 8, 128, 128);
     }
 
     // Load the brick
@@ -231,8 +230,8 @@ int main(int argc, char *argv[])
 
     // Shared data between the game loop and networking thread
     SharedData sharedData;
-    sharedData.playerX = player.getX();
-    sharedData.playerY = player.getY();
+    sharedData.playerX = go::getX(player);
+    sharedData.playerY = go::getY(player);
 
     // Start networking in its own thread
     std::thread networkThread(networkingThread,std::ref(sharedData),clientID);
@@ -365,12 +364,12 @@ int main(int argc, char *argv[])
 
             // Move left
             if (Input::isKeyPressed(SDL_SCANCODE_A)) {
-                player.move(-moveSpeed * deltaTime,0.0f);
+                go::move(player, -moveSpeed * deltaTime,0.0f);
             }
 
             // Move right
             if (Input::isKeyPressed(SDL_SCANCODE_D)) {
-                player.move(moveSpeed * deltaTime,0.0f);
+                go::move(player, moveSpeed * deltaTime,0.0f);
             }
 
             // Crouch placeholder
@@ -388,17 +387,17 @@ int main(int argc, char *argv[])
         physics.update(player,deltaTime);
 
         // Ground check
-        float playerLeft = player.getX();
-        float playerRight = player.getX() + player.getWidth();
+        float playerLeft = go::getX(player);
+        float playerRight = go::getX(player) + go::getWidth(player);
         bool overGap = playerRight > GAP_START && playerLeft < GAP_END;
 
-        if (!overGap && player.getY() + player.getHeight() >= GROUND_Y && player.getVelocityY() >= 0.0f) {
-            player.setPosition(player.getX(),GROUND_Y - player.getHeight());
-            player.setVelocityY(0.0f);
-            player.setGrounded(true);
+        if (!overGap && go::getY(player) + go::getHeight(player) >= GROUND_Y && go::getVelocityY(player) >= 0.0f) {
+            go::setPosition(player, go::getX(player),GROUND_Y - go::getHeight(player));
+            go::setVelocityY(player, 0.0f);
+            go::setGrounded(player, true);
         }
         else {
-            player.setGrounded(false);
+            go::setGrounded(player, false);
         }
 
         // Section 5: Full P2P no server platform synchronization
@@ -416,41 +415,41 @@ int main(int argc, char *argv[])
 
         float platformDeltaX = newPlatformX - previousPlatformX;
 
-        platform.setPosition(newPlatformX, newPlatformY);
+        go::setPosition(platform, newPlatformX, newPlatformY);
 
         previousPlatformX = newPlatformX;
 
         // Platform collision: stand on top of it and get
         // carried along as it moves.
-        bool horizontallyOverPlatform = playerRight > platform.getX() && playerLeft < platform.getX() + platform.getWidth();
+        bool horizontallyOverPlatform = playerRight > go::getX(platform) && playerLeft < go::getX(platform) + go::getWidth(platform);
 
-        bool landingOnPlatform = player.getY() + player.getHeight() <= platform.getY() + 20.0f &&
-            player.getY() + player.getHeight() >= platform.getY() - 20.0f && player.getVelocityY() >= 0.0f;
+        bool landingOnPlatform = go::getY(player) + go::getHeight(player) <= go::getY(platform) + 20.0f &&
+            go::getY(player) + go::getHeight(player) >= go::getY(platform) - 20.0f && go::getVelocityY(player) >= 0.0f;
 
         if (horizontallyOverPlatform && landingOnPlatform) {
-            player.setPosition(player.getX() + platformDeltaX, platform.getY() - player.getHeight());
+            go::setPosition(player, go::getX(player) + platformDeltaX, go::getY(platform) - go::getHeight(player));
 
-            player.setVelocityY(0.0f);
-            player.setGrounded(true);
+            go::setVelocityY(player, 0.0f);
+            go::setGrounded(player, true);
         }
 
         // Fall reset
-        if (player.getY() > actualHeight) {
+        if (go::getY(player) > actualHeight) {
             SDL_Log("Player fell! Respawning at the portal.");
 
-            player.setPosition(PORTAL_SPAWN_X,PORTAL_SPAWN_Y);
-            player.setVelocity(0.0f,0.0f);
-            player.setGrounded(true);
+            go::setPosition(player, PORTAL_SPAWN_X,PORTAL_SPAWN_Y);
+            go::setVelocity(player, 0.0f,0.0f);
+            go::setGrounded(player, true);
         }
 
         // Totem collision
         if (Collision::checkCollision(player,totem)) {
             if (Input::isKeyPressed(SDL_SCANCODE_A)) {
-                player.move(moveSpeed * deltaTime,0.0f);
+                go::move(player, moveSpeed * deltaTime,0.0f);
             }
 
             if (Input::isKeyPressed(SDL_SCANCODE_D)) {
-                player.move(-moveSpeed * deltaTime,0.0f);
+                go::move(player, -moveSpeed * deltaTime,0.0f);
             }
         }
 
@@ -458,18 +457,18 @@ int main(int argc, char *argv[])
         if (Collision::checkCollision(player,enemySkull)) {
             SDL_Log("Player touched an enemy! Respawning at the portal.");
 
-            player.setPosition(PORTAL_SPAWN_X,PORTAL_SPAWN_Y);
+            go::setPosition(player, PORTAL_SPAWN_X,PORTAL_SPAWN_Y);
 
-            player.setVelocity(0.0f,0.0f);
+            go::setVelocity(player, 0.0f,0.0f);
 
-            player.setGrounded(true);
+            go::setGrounded(player, true);
         }
 
         // Share local player position
         {
             std::lock_guard<std::mutex> lock(sharedData.playerMutex);
-            sharedData.playerX = player.getX();
-            sharedData.playerY = player.getY();
+            sharedData.playerX = go::getX(player);
+            sharedData.playerY = go::getY(player);
         }
 
         // Enemy patrol movement
@@ -535,17 +534,17 @@ int main(int argc, char *argv[])
         }
 
         // Update animations
-        player.updateAnimation();
+        go::updateAnimation(player);
         enemySkull.updateAnimation(deltaTime);
         totem.updateAnimation(deltaTime);
         portal.updateAnimation(deltaTime);
-        platform.updateAnimation(deltaTime);
+        go::updateAnimation(platform);
 
         // Render objects
         portal.render(renderer);
         totem.render(renderer);
         enemySkull.render(renderer);
-        platform.render(renderer);
+        go::render(platform, renderer);
 
         // Render positions received directly from remote peers
         {
@@ -557,8 +556,8 @@ int main(int argc, char *argv[])
                 Entity remotePlayer(
                     remote.x,
                     remote.y,
-                    player.getWidth(),
-                    player.getHeight()
+                    go::getWidth(player),
+                    go::getHeight(player)
                 );
 
                 remotePlayer.setTexture(playerTexture);
@@ -568,7 +567,7 @@ int main(int argc, char *argv[])
         }
 
         // Render local player
-        player.render(renderer);
+        go::render(player, renderer);
         SDL_RenderPresent(renderer);
     }
 
