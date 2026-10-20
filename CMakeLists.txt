@@ -76,3 +76,33 @@ target_link_libraries(
     PRIVATE
     ${ZMQ_LIBRARIES}
 )
+
+# Milestone 3 Sections C.2-C.4: headless performance benchmark (no SDL needed).
+# Uses the same Networking.cpp as the game. Built with -O2 so timings are not
+# distorted by an unoptimized (Debug) build.
+add_executable(
+    benchmark
+    src/Benchmark.cpp
+    src/Networking.cpp
+)
+ 
+target_include_directories(
+    benchmark
+    PRIVATE
+    ${CPPZMQ_INCLUDE_DIR}
+    ${ZMQ_INCLUDE_DIRS}
+)
+ 
+target_link_directories(
+    benchmark
+    PRIVATE
+    ${ZMQ_LIBRARY_DIRS}
+)
+ 
+target_link_libraries(
+    benchmark
+    PRIVATE
+    ${ZMQ_LIBRARIES}
+)
+ 
+target_compile_options(benchmark PRIVATE -O2)

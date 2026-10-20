@@ -7,6 +7,7 @@
 #include <thread>
 #include <iostream>
 #include <cstring>
+#include <vector>
 
 // Section 5: Ports used for direct peer-to-peer communication.
 #define PEER_BASE_PORT 6000
@@ -46,7 +47,8 @@ void networkingThread(
         // Allow ZeroMQ time to establish P2P subscriptions across peers
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-        std::cout << "Peer " << clientID << " P2P networking thread started on port " << peerPort << std::endl;
+        std::cout << "Peer " << clientID << " P2P networking thread started on port " << peerPort
+                  << " (data format: " << NetFormat::formatName(sharedData.networkFormat) << ")" << std::endl;
 
         while (sharedData.running.load()) {
 
@@ -64,13 +66,34 @@ void networkingThread(
                 localY = sharedData.playerY;
             }
 
+            // Section C.2-C.4: copy the extra moving objects (empty in the normal game).
+            std::vector<ObjectState> localObjects;
+            {
+                std::lock_guard<std::mutex> lock(sharedData.playerMutex);
+                localObjects = sharedData.localObjects;
+            }
+
             // Section 5: Send this player's position directly to the other clients.
             // The server does not relay this data.
-            std::ostringstream peerStream;
-            peerStream << clientID << " " << localX << " " << localY;
+            // Section C.1: encode() builds either the TEXT string or the BINARY
+            // struct, depending on the format chosen when the client was started.
+            const auto encodeStart = std::chrono::steady_clock::now();
+            std::string peerString = NetFormat::encode(sharedData.networkFormat, clientID, localX, localY);
+            std::string objectString;
+            if (!localObjects.empty()) {
+                objectString = NetFormat::encodeObjects(sharedData.networkFormat, clientID, localObjects);
+            }
+            const auto encodeEnd = std::chrono::steady_clock::now();
 
-            std::string peerString = peerStream.str();
             peerPublisher.send(zmq::buffer(peerString), zmq::send_flags::none);
+            if (!objectString.empty()) {
+                peerPublisher.send(zmq::buffer(objectString), zmq::send_flags::none);
+            }
+
+            // Section C.2-C.4: Record how much work this send round took.
+            sharedData.stats.ticks++;
+            sharedData.stats.bytesSent += peerString.size() + objectString.size();
+            sharedData.stats.encodeNanos += std::chrono::duration_cast<std::chrono::nanoseconds>(encodeEnd - encodeStart).count();
 
             // Section 5: Non-blocking loop to receive messages from all other peers
             while (true) {
@@ -82,14 +105,32 @@ void networkingThread(
                 // No more pending messages from peers
                 if (!peerResult) { break; }
 
-                std::string receivedString(static_cast<char*>(peerMessage.data()), peerMessage.size());
-                std::stringstream entryStream(receivedString);
-
                 int remoteID;
                 float remoteX;
                 float remoteY;
 
-                if (entryStream >> remoteID >> remoteX >> remoteY) {
+                // Section C.2-C.4: Object snapshots (benchmark only) are stored separately.
+                if (NetFormat::isObjectMessage(peerMessage.data(), peerMessage.size())) {
+                    std::vector<ObjectState> remoteObjectList;
+                    const auto decodeStart = std::chrono::steady_clock::now();
+                    const bool decoded = NetFormat::decodeObjects(peerMessage.data(), peerMessage.size(), remoteID, remoteObjectList);
+                    sharedData.stats.decodeNanos += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - decodeStart).count();
+                    sharedData.stats.messagesReceived++;
+
+                    if (decoded && remoteID != clientID && remoteID >= 1 && remoteID <= TOTAL_PEERS) {
+                        std::lock_guard<std::mutex> lock(sharedData.playerMutex);
+                        sharedData.remoteObjects[remoteID] = std::move(remoteObjectList);
+                    }
+                    continue; // done with this message, check for the next one
+                }
+
+                // Section C.1: decode() detects TEXT vs BINARY from the message itself.
+                const auto decodeStart = std::chrono::steady_clock::now();
+                const bool playerDecoded = NetFormat::decode(peerMessage.data(), peerMessage.size(), remoteID, remoteX, remoteY);
+                sharedData.stats.decodeNanos += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - decodeStart).count();
+                sharedData.stats.messagesReceived++;
+
+                if (playerDecoded) {
                     if (remoteID != clientID) {
                         // Thread-safe update of remote player position map
                         std::lock_guard<std::mutex> lock(sharedData.playerMutex);
@@ -123,6 +164,7 @@ void networkingThread(
                 for (auto it = sharedData.remotePlayers.begin(); it != sharedData.remotePlayers.end();) {
                     if (now - it->second.lastSeen > std::chrono::seconds(2)) {
                         std::cout << "Peer " << it->first << " disconnected (timeout)" << std::endl;
+                        sharedData.remoteObjects.erase(it->first);  // Section C.2-C.4
                         it = sharedData.remotePlayers.erase(it);
                     } else {
                         ++it;
@@ -134,7 +176,13 @@ void networkingThread(
 
             int sleepMilliseconds = static_cast<int>(16.0 / (scale > 0.0 ? scale : 1.0));
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(sleepMilliseconds));
+            if (sharedData.networkTickMicros > 0) {
+                // Section C.2-C.4: The benchmark uses a faster fixed tick so the cost of
+                // each data format is easy to measure. The game leaves this at 0.
+                std::this_thread::sleep_for(std::chrono::microseconds(sharedData.networkTickMicros));
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(sleepMilliseconds));
+            }
         }
 
         // Clean resource shutdown

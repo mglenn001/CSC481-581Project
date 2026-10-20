@@ -38,24 +38,30 @@ const int TOTEM_FRAME_H = 192;
 const float PLATFORM_MIN_X = 600.0f;
 const float PLATFORM_MAX_X = 800.0f;
 
-
 int main(int argc, char *argv[])
 {
-
     // Each game client must have its own ID.
     // Example: ./main 1 ./main 2 ./main 3
+    // Milestone 3 Section C.1: Optional second argument picks the network data format.
+    // Example: ./main 1 binary
     if (argc < 2) {
-        SDL_Log("Usage: ./main <clientID>");
+        SDL_Log("Usage: ./main <clientID> [text|binary]");
         return 1;
     }
 
     int clientID = std::stoi(argv[1]);
 
+    // Default is TEXT (the original format). "binary" selects the raw-struct format.
+    NetworkFormat networkFormat = NetworkFormat::TEXT;
+    if (argc >= 3) {
+        networkFormat = NetFormat::parseFormat(argv[2]);
+    }
+
     if (clientID < 1 || clientID > 4) {
         SDL_Log("Client ID must be between 1 and 4");
         return 1;
     }
-    SDL_Log("Starting peer client %d", clientID);
+    SDL_Log("Starting peer client %d (network format: %s)", clientID, NetFormat::formatName(networkFormat));
 
     // Initialize SDL
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -173,10 +179,8 @@ int main(int argc, char *argv[])
     // carried along by however far it moved this frame.
     float previousPlatformX = go::getX(platform);
 
-
     // Load the player's sprite texture
     SDL_Texture* playerTexture = IMG_LoadTexture(renderer, "../assets/darkworld_enemy_nyx_idle.png");
-
     if (!playerTexture) {
         SDL_Log("Could not load texture: %s",SDL_GetError());
     }
@@ -187,14 +191,12 @@ int main(int argc, char *argv[])
 
     // Load the brick
     SDL_Texture* brickTexture = IMG_LoadTexture(renderer,"../assets/brick.png");
-
     if (!brickTexture) {
         SDL_Log("Could not load brick texture: %s",SDL_GetError());
     }
 
     // Load totem texture
     SDL_Texture* totemTexture = IMG_LoadTexture(renderer,"../assets/totem.png");
-
     if (totemTexture) {
         totem.setTexture(totemTexture);
         totem.setSpriteSheet(
@@ -207,7 +209,6 @@ int main(int argc, char *argv[])
 
     // Load skull texture
     SDL_Texture* skullTexture = IMG_LoadTexture(renderer,"../assets/enemy_skull.png");
-
     if (skullTexture) {
         enemySkull.setTexture(skullTexture);
         enemySkull.setSpriteSheet(
@@ -218,10 +219,8 @@ int main(int argc, char *argv[])
         enemySkull.setAnimationSpeed(8.0f);
     }
 
-
     // Load portal texture
     SDL_Texture* portalTexture = IMG_LoadTexture(renderer,"../assets/swirlingorb.png");
-
     if (portalTexture) {
         portal.setTexture(portalTexture);
         portal.setSpriteSheet(
@@ -234,12 +233,12 @@ int main(int argc, char *argv[])
 
     // Shared data between the game loop and networking thread
     SharedData sharedData;
+    sharedData.networkFormat = networkFormat; // Section C.1: format used by the networking thread
     sharedData.playerX = go::getX(player);
     sharedData.playerY = go::getY(player);
 
     // Start networking in its own thread
     std::thread networkThread(networkingThread,std::ref(sharedData),clientID);
-
     SDL_Log("Client %d networking thread created",clientID);
 
     bool running = true;
@@ -252,9 +251,6 @@ int main(int argc, char *argv[])
     bool pauseKeyWasPressed = false;
     bool minusKeyWasPressed = false;
     bool plusKeyWasPressed = false;
-
-    // Record base clock start time for deterministic platform sync across peers
-    // auto startTime = std::chrono::steady_clock::now();
 
     // Main game loop
     while (running) {
@@ -280,7 +276,6 @@ int main(int argc, char *argv[])
          * + = increase game speed
          * T = scaling mode
          */
-
         // Pause / unpause
         bool pauseKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_P);
         if (pauseKeyIsPressed && !pauseKeyWasPressed) {
@@ -298,8 +293,7 @@ int main(int argc, char *argv[])
         // Timeline scaling
         bool minusKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_MINUS);
         bool plusKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_EQUALS);
-        // Decrease:
-        // 2.0x -> 1.0x -> 0.5x
+        // Decrease: 2.0x -> 1.0x -> 0.5x
         if (minusKeyIsPressed && !minusKeyWasPressed) {
             double currentScale = gameTime.getScale();
 
@@ -312,8 +306,7 @@ int main(int argc, char *argv[])
 
             SDL_Log("Game time scale: %.1fx",gameTime.getScale());
         }
-        // Increase:
-        // 0.5x -> 1.0x -> 2.0x
+        // Increase: 0.5x -> 1.0x -> 2.0x
         if (plusKeyIsPressed && !plusKeyWasPressed) {
             double currentScale =
                 gameTime.getScale();
@@ -343,7 +336,6 @@ int main(int argc, char *argv[])
 
         // Toggle scaling mode with T
         bool scaleKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_T);
-
         if (scaleKeyIsPressed && !scaleKeyWasPressed) {
             Scaling::toggleMode();
 
@@ -353,7 +345,6 @@ int main(int argc, char *argv[])
 
         const float WALK_SPEED = 300.0f;
         const float RUN_SPEED = 550.0f;
-
         float moveSpeed = WALK_SPEED;
 
         if (Input::isKeyPressed(SDL_SCANCODE_LSHIFT) || Input::isKeyPressed(SDL_SCANCODE_RSHIFT)) {
@@ -399,24 +390,15 @@ int main(int argc, char *argv[])
             go::setPosition(player, go::getX(player),GROUND_Y - go::getHeight(player));
             go::setVelocityY(player, 0.0f);
             go::setGrounded(player, true);
-        }
-        else {
+        } else {
             go::setGrounded(player, false);
         }
-
-        // Section 5: Full P2P no server platform synchronization
-        // Calculate total elapsed wall-clock time since program startup
-        // auto now = std::chrono::steady_clock::now();
-        // float totalElapsedSeconds = std::chrono::duration<float>(now - startTime).count();
 
         // Milestone 3 Section B.4: Synchronize moving platforms across peers.
         // Use a shared wall-clock reference instead of each client's startup time.
         auto now = std::chrono::system_clock::now();
 
-        double sharedTimeSeconds =
-            std::chrono::duration<double>(
-                now.time_since_epoch()
-            ).count();
+        double sharedTimeSeconds = std::chrono::duration<double>(now.time_since_epoch()).count();
 
         // Repeat the platform movement every 60 seconds.
         // All clients on the same machine use the same time reference.
@@ -431,21 +413,17 @@ int main(int argc, char *argv[])
         float newPlatformY = GROUND_Y - 200.0f;
 
         float platformDeltaX = newPlatformX - previousPlatformX;
-
         go::setPosition(platform, newPlatformX, newPlatformY);
-
         previousPlatformX = newPlatformX;
 
         // Platform collision: stand on top of it and get
         // carried along as it moves.
         bool horizontallyOverPlatform = playerRight > go::getX(platform) && playerLeft < go::getX(platform) + go::getWidth(platform);
-
         bool landingOnPlatform = go::getY(player) + go::getHeight(player) <= go::getY(platform) + 20.0f &&
             go::getY(player) + go::getHeight(player) >= go::getY(platform) - 20.0f && go::getVelocityY(player) >= 0.0f;
 
         if (horizontallyOverPlatform && landingOnPlatform) {
             go::setPosition(player, go::getX(player) + platformDeltaX, go::getY(platform) - go::getHeight(player));
-
             go::setVelocityY(player, 0.0f);
             go::setGrounded(player, true);
         }
@@ -475,9 +453,7 @@ int main(int argc, char *argv[])
             SDL_Log("Player touched an enemy! Respawning at the portal.");
 
             go::setPosition(player, PORTAL_SPAWN_X,PORTAL_SPAWN_Y);
-
             go::setVelocity(player, 0.0f,0.0f);
-
             go::setGrounded(player, true);
         }
 
@@ -488,20 +464,8 @@ int main(int argc, char *argv[])
             sharedData.playerY = go::getY(player);
         }
 
-        // // Enemy patrol movement
-        // enemySkull.move(skullSpeed * skullDirection * deltaTime,0.0f);
-
-        // if (enemySkull.getX() >= skullPatrolMaxX) {
-        //     skullDirection = -1;
-        // }
-
-        // if (enemySkull.getX() <= skullPatrolMinX ) {
-        //     skullDirection = 1;
-        // }
-
         // Milestone 3 Section B.4:
         // Deterministic enemy patrol synchronized across P2P clients.
-
         // Time needed to travel from one patrol boundary to the other
         double patrolDistance = skullPatrolMaxX - skullPatrolMinX;
         double oneWayTime = patrolDistance / skullSpeed;
@@ -512,27 +476,19 @@ int main(int argc, char *argv[])
 
         // Move right, then left, repeating the patrol
         double skullOffset;
-
         if (cycleTime < oneWayTime) {
             skullOffset = cycleTime * skullSpeed;
         } else {
             skullOffset = (fullCycleTime - cycleTime) * skullSpeed;
         }
 
-        float synchronizedSkullX =
-            skullPatrolMinX + static_cast<float>(skullOffset);
+        float synchronizedSkullX = skullPatrolMinX + static_cast<float>(skullOffset);
 
         // Keep the enemy at its existing vertical position
         enemySkull.setPosition(synchronizedSkullX, enemySkull.getY());
 
         // Background color
-        SDL_SetRenderDrawColor(
-            renderer,
-            169,
-            186,
-            157,
-            255
-        );
+        SDL_SetRenderDrawColor(renderer, 169, 186, 157, 255);
 
         SDL_RenderClear(renderer);
 
@@ -596,8 +552,7 @@ int main(int argc, char *argv[])
             for (const auto& entry : sharedData.remotePlayers) {
                 const RemotePlayerState& remote = entry.second;
 
-                GameObject remotePlayer = makePlayer(entry.first, remote.x, remote.y,
-                                                     go::getWidth(player), go::getHeight(player));
+                GameObject remotePlayer = makePlayer(entry.first, remote.x, remote.y, go::getWidth(player), go::getHeight(player));
                 if (auto* network = remotePlayer.getComponent<NetworkComponent>()) {
                     network->authority = NetworkAuthority::RemoteMirrored;
                 }

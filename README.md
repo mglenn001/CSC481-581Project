@@ -59,7 +59,20 @@ Then launch the MinGW64 shell and continue.
 
 ----------
 
-### 3. Build the project
+### 3. Install Matplotlib
+
+> Graphs need matplotlib.
+
+#### In the **Terminal**:
+
+```bash
+pip3 install matplotlib
+
+```
+
+----------
+
+### 4. Build the project
 
 ```bash
 mkdir build && cd build
@@ -72,37 +85,49 @@ make
 
 ----------
 
-### 5. Run the program
+### 5. Run the program (from the build folder)
+
+No need to run `./server` command because this is Peer-to-Peer. You can add the network data format name after the client ID.
 
 #### On the **first terminal**:
 
 ```bash
-./server
+./main 1            # TEXT (default)
+./main 1 text
+./main 1 binary
 
 ```
 
 #### On the **second terminal**:
 
 ```bash
-./main 1
+./main 2
 
 ```
 
 #### On the **third terminal**:
 
 ```bash
-./main 2
-
-```
-
-#### On the **fourth terminal**:
-
-```bash
 ./main 3
 
 ```
 
-You should see client/server running in the console and Game Engine window(s) open.
+You should see Game Engine window(s) open.
+
+----------
+
+### 6. Run the experiments (from the build folder)
+
+#### In the **terminal**:
+
+```bash
+python3 ../experiments/run_experiments.py --quick      # short test, a few minutes
+python3 ../experiments/run_experiments.py              # full run (100,000 iterations x 5 trials)
+python3 ../experiments/analyze.py                      # .csv files and graphs in results folder
+
+```
+
+Each experiment changes one factor and keeps the others fixed. Every condition is run with both formats, 5 times each (the order of the formats alternates between trials).
 
 ## Game Control
 
