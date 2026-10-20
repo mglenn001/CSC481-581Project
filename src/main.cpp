@@ -51,6 +51,10 @@ int main(int argc, char *argv[])
 
     int clientID = std::stoi(argv[1]);
 
+    if (clientID < 1 || clientID > 4) {
+        SDL_Log("Client ID must be between 1 and 4");
+        return 1;
+    }
     SDL_Log("Starting peer client %d", clientID);
 
     // Initialize SDL
@@ -135,10 +139,10 @@ int main(int argc, char *argv[])
 
     enemySkull.setGravityEnabled(false);
 
-    float skullPatrolMinX = GAP_START;
-    float skullPatrolMaxX = GAP_END;
-    float skullSpeed = 150.0f;
-    int skullDirection = 1;
+    // Shared patrol settings for all P2P clients
+    const float skullPatrolMinX = GAP_START;
+    const float skullPatrolMaxX = GAP_END;
+    const float skullSpeed = 150.0f;
 
     // Portal: visual respawn point
     Entity portal(
@@ -250,7 +254,7 @@ int main(int argc, char *argv[])
     bool plusKeyWasPressed = false;
 
     // Record base clock start time for deterministic platform sync across peers
-    auto startTime = std::chrono::steady_clock::now();
+    // auto startTime = std::chrono::steady_clock::now();
 
     // Main game loop
     while (running) {
@@ -402,15 +406,28 @@ int main(int argc, char *argv[])
 
         // Section 5: Full P2P no server platform synchronization
         // Calculate total elapsed wall-clock time since program startup
-        auto now = std::chrono::steady_clock::now();
-        float totalElapsedSeconds = std::chrono::duration<float>(now - startTime).count();
+        // auto now = std::chrono::steady_clock::now();
+        // float totalElapsedSeconds = std::chrono::duration<float>(now - startTime).count();
+
+        // Milestone 3 Section B.4: Synchronize moving platforms across peers.
+        // Use a shared wall-clock reference instead of each client's startup time.
+        auto now = std::chrono::system_clock::now();
+
+        double sharedTimeSeconds =
+            std::chrono::duration<double>(
+                now.time_since_epoch()
+            ).count();
+
+        // Repeat the platform movement every 60 seconds.
+        // All clients on the same machine use the same time reference.
+        double platformTime = std::fmod(sharedTimeSeconds, 60.0);
 
         // Deterministic oscillation function based on real wall-clock time
         float midPoint = (PLATFORM_MIN_X + PLATFORM_MAX_X) / 2.0f;
         float amplitude = (PLATFORM_MAX_X - PLATFORM_MIN_X) / 2.0f;
 
         // Sine wave ensures every peer computes the exact same platform position independently
-        float newPlatformX = midPoint + amplitude * std::sin(totalElapsedSeconds * 1.5f);
+        float newPlatformX = midPoint + amplitude * std::sin(platformTime * 1.5f);
         float newPlatformY = GROUND_Y - 200.0f;
 
         float platformDeltaX = newPlatformX - previousPlatformX;
@@ -471,16 +488,42 @@ int main(int argc, char *argv[])
             sharedData.playerY = go::getY(player);
         }
 
-        // Enemy patrol movement
-        enemySkull.move(skullSpeed * skullDirection * deltaTime,0.0f);
+        // // Enemy patrol movement
+        // enemySkull.move(skullSpeed * skullDirection * deltaTime,0.0f);
 
-        if (enemySkull.getX() >= skullPatrolMaxX) {
-            skullDirection = -1;
+        // if (enemySkull.getX() >= skullPatrolMaxX) {
+        //     skullDirection = -1;
+        // }
+
+        // if (enemySkull.getX() <= skullPatrolMinX ) {
+        //     skullDirection = 1;
+        // }
+
+        // Milestone 3 Section B.4:
+        // Deterministic enemy patrol synchronized across P2P clients.
+
+        // Time needed to travel from one patrol boundary to the other
+        double patrolDistance = skullPatrolMaxX - skullPatrolMinX;
+        double oneWayTime = patrolDistance / skullSpeed;
+        double fullCycleTime = 2.0 * oneWayTime;
+
+        // Use the shared wall-clock time, not local deltaTime
+        double cycleTime = std::fmod(sharedTimeSeconds, fullCycleTime);
+
+        // Move right, then left, repeating the patrol
+        double skullOffset;
+
+        if (cycleTime < oneWayTime) {
+            skullOffset = cycleTime * skullSpeed;
+        } else {
+            skullOffset = (fullCycleTime - cycleTime) * skullSpeed;
         }
 
-        if (enemySkull.getX() <= skullPatrolMinX ) {
-            skullDirection = 1;
-        }
+        float synchronizedSkullX =
+            skullPatrolMinX + static_cast<float>(skullOffset);
+
+        // Keep the enemy at its existing vertical position
+        enemySkull.setPosition(synchronizedSkullX, enemySkull.getY());
 
         // Background color
         SDL_SetRenderDrawColor(
@@ -553,16 +596,14 @@ int main(int argc, char *argv[])
             for (const auto& entry : sharedData.remotePlayers) {
                 const RemotePlayerState& remote = entry.second;
 
-                Entity remotePlayer(
-                    remote.x,
-                    remote.y,
-                    go::getWidth(player),
-                    go::getHeight(player)
-                );
-
-                remotePlayer.setTexture(playerTexture);
-                remotePlayer.setSpriteSheet(8,128,128);
-                remotePlayer.render(renderer);
+                GameObject remotePlayer = makePlayer(entry.first, remote.x, remote.y,
+                                                     go::getWidth(player), go::getHeight(player));
+                if (auto* network = remotePlayer.getComponent<NetworkComponent>()) {
+                    network->authority = NetworkAuthority::RemoteMirrored;
+                }
+                go::setTexture(remotePlayer, playerTexture);
+                go::setSpriteSheet(remotePlayer, 8, 128, 128);
+                go::render(remotePlayer, renderer);
             }
         }
 
