@@ -49,6 +49,27 @@ public:
         queue_.push(QueuedEvent{std::move(event), nextSequence_++});
     }
 
+    // Milestone 4 Section 1.2: Networked raising
+    // The event is queued locally and handed to the network sink
+    // so it is sent to every other client.
+    void raiseNetworked(GameEvent event) {
+        NetworkSink sink;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            sink = networkSink_;
+        }
+        if (sink) sink(event); // sink only queues the event, it does not block
+        raise(std::move(event));
+    }
+
+    // Set by the game: The function that sends an event over the network.
+    // If it is never set, raiseNetworked simply behaves like raise.
+    using NetworkSink = std::function<void(const GameEvent&)>;
+    void setNetworkSink(NetworkSink sink) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        networkSink_ = std::move(sink);
+    }
+
     // Handling: called on main game thread, no callback executes under lock
     // Priority first, then earliest timestamp, then FIFO for equal timestamps
     // Events raised by handlers are processed on the next dispatch call
@@ -87,6 +108,7 @@ private:
         }
     };
     std::mutex mutex_;
+    NetworkSink networkSink_;
     std::map<EventType, std::vector<Listener>> listeners_;
     std::priority_queue<QueuedEvent, std::vector<QueuedEvent>, EarlierFirst> queue_;
     SubscriptionId nextId_ = 1;

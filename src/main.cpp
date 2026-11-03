@@ -4,6 +4,9 @@
 #include <thread>
 #include <cmath>
 #include <chrono>
+#include <algorithm>
+#include <string>
+#include <vector>
 
 #include "Entity.h"
 #include "Physics.h"
@@ -238,6 +241,14 @@ int main(int argc, char *argv[])
     sharedData.playerX = go::getX(player);
     sharedData.playerY = go::getY(player);
 
+    // Milestone 4 Section 1.2: The event manager must exist BEFORE the networking
+    // thread starts, because that thread raises events received from other clients.
+    EventManager events;
+    sharedData.eventManager = &events; // incoming events are raised here
+    // Outgoing: raiseNetworked() hands each event to this function, which only
+    // queues it. The networking thread does the actual sending.
+    events.setNetworkSink([&](const GameEvent& e) { sharedData.queueOutgoingEvent(e); });
+
     // Start networking in its own thread
     std::thread networkThread(networkingThread,std::ref(sharedData),clientID);
     SDL_Log("Client %d networking thread created",clientID);
@@ -248,12 +259,28 @@ int main(int argc, char *argv[])
     // Game timeline anchored to real time
     Timeline gameTime;
 
-    // Milestone 4 Section 1.1: each P2P client owns an event manager.
-    EventManager events;
+    // Milestone 4 Section 1.1: each P2P client owns an event manager (created above).
     auto raiseEvent = [&](EventType type, EventPriority priority,
                           const std::string& detail, float x = 0.0f, float y = 0.0f) {
         events.raise(GameEvent{type, priority, gameTime.getTime(), clientID,
                                clientID, detail, x, y});
+    };
+
+    // Milestone 4 Section 1.2: Same as raiseEvent, but the event is ALSO sent to
+    // every other client. Used for events other players should see (death, spawn).
+    auto raiseNetworkedEvent = [&](EventType type, EventPriority priority,
+                                   const std::string& detail, float x = 0.0f, float y = 0.0f) {
+        events.raiseNetworked(GameEvent{type, priority, gameTime.getTime(), clientID,
+                                        clientID, detail, x, y});
+    };
+
+    // Milestone 4 Section 1.2: Short on-screen messages about events that
+    // happened on OTHER clients. Only the game thread touches this list.
+    struct Notice { std::string text; Uint64 expiresAt; };
+    std::vector<Notice> notices;
+    auto addNotice = [&](const std::string& text) {
+        notices.push_back({text, SDL_GetTicks() + 3000}); // show for 3 seconds
+        SDL_Log("%s", text.c_str());
     };
 
     // Event handlers update the game state, rather than collision/input code
@@ -271,23 +298,36 @@ int main(int argc, char *argv[])
             if (Input::isKeyPressed(SDL_SCANCODE_D)) go::move(player, -e.x, 0.0f);
         } else if (e.detail == "enemy") {
             SDL_Log("Collision event: player touched enemy");
-            raiseEvent(EventType::Death, EventPriority::Critical, "enemy");
+            raiseNetworkedEvent(EventType::Death, EventPriority::Critical, "enemy",
+                                go::getX(player), go::getY(player));
         }
     });
     events.subscribe(EventType::Death, [&](const GameEvent& e) {
+        // Event came from another client: just tell the player. Their own
+        // client already respawns them, and we show their new position via the
+        // normal position messages. We must NOT respawn our own player here.
+        if (e.sourceId != clientID) {
+            addNotice("Player " + std::to_string(e.sourceId) + " died (" + e.detail + ")");
+            return;
+        }
         SDL_Log("Death event (%s): respawn requested", e.detail.c_str());
-        raiseEvent(EventType::Spawn, EventPriority::High, "portal",
-                   PORTAL_SPAWN_X, PORTAL_SPAWN_Y);
+        raiseNetworkedEvent(EventType::Spawn, EventPriority::High, "portal",
+                            PORTAL_SPAWN_X, PORTAL_SPAWN_Y);
     });
     events.subscribe(EventType::Spawn, [&](const GameEvent& e) {
+        // Event came from another client: only show a message, don't move our player.
+        if (e.sourceId != clientID) {
+            addNotice("Player " + std::to_string(e.sourceId) + " spawned (" + e.detail + ")");
+            return;
+        }
         go::setPosition(player, e.x, e.y);
         go::setVelocity(player, 0.0f, 0.0f);
         go::setGrounded(player, true);
         SDL_Log("Spawn event: player returned to portal");
     });
     // Spawn event at startup demonstrates registration/raising/handling.
-    raiseEvent(EventType::Spawn, EventPriority::High, "initial",
-               PORTAL_SPAWN_X, PORTAL_SPAWN_Y);
+    raiseNetworkedEvent(EventType::Spawn, EventPriority::High, "initial",
+                        PORTAL_SPAWN_X, PORTAL_SPAWN_Y);
     events.dispatch();
 
     // Used so one key press only triggers once
@@ -467,7 +507,8 @@ int main(int argc, char *argv[])
 
         // Detect gameplay conditions and raise events, not direct actions.
         if (go::getY(player) > actualHeight)
-            raiseEvent(EventType::Death, EventPriority::Critical, "fall");
+            raiseNetworkedEvent(EventType::Death, EventPriority::Critical, "fall",
+                                go::getX(player), go::getY(player));
 
         if (Collision::checkCollision(player, totem))
             raiseEvent(EventType::Collision, EventPriority::Normal,
@@ -589,6 +630,21 @@ int main(int argc, char *argv[])
 
         // Render local player
         go::render(player, renderer);
+
+        // Milestone 4 Section 1.2: Draw messages about events from other clients
+        // and drop the ones that have expired.
+        {
+            const Uint64 nowTicks = SDL_GetTicks();
+            notices.erase(std::remove_if(notices.begin(), notices.end(),
+                [nowTicks](const Notice& n) { return n.expiresAt <= nowTicks; }), notices.end());
+
+            SDL_SetRenderDrawColor(renderer, 200, 30, 30, 255);
+            float textY = 10.0f;
+            for (const Notice& n : notices) {
+                SDL_RenderDebugText(renderer, 10.0f, textY, n.text.c_str());
+                textY += 12.0f;
+            }
+        }
         SDL_RenderPresent(renderer);
     }
 
