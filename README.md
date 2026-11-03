@@ -81,6 +81,12 @@ make
 
 ```
 
+#### To run the **tests**:
+
+```bash
+make check          # Rebuilds and runs the networked event tests
+make test           # Runs the tests without rebuilding
+
 > Ensure `SDL3_DIR` is correctly set if CMake cannot find SDL.
 
 ----------
