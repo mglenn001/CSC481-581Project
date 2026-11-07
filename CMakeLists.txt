@@ -137,9 +137,17 @@ target_link_libraries(
 
 add_test(NAME network_events COMMAND test_network_events)
 
+# M4 S1.3: Headless test for the replay system (no SDL or ZeroMQ needed)
+add_executable(
+    test_replay
+    tests/test_replay.cpp
+)
+
+add_test(NAME replay COMMAND test_replay)
+
 # "make test" only runs tests; "make check" rebuilds the test first, then runs it
 add_custom_target(
     check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-    DEPENDS test_network_events
+    DEPENDS test_network_events test_replay
 )

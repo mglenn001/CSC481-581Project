@@ -9,7 +9,14 @@
 #include <utility>
 #include <vector>
 
-enum class EventType { Input, Collision, Death, Spawn };
+// Milestone 4 Section 1.3: the Replay* types control the replay system.
+// They are added AFTER Spawn so the network decoder (which only accepts
+// Input..Spawn) keeps rejecting them: replay control stays on one client.
+enum class EventType {
+    Input, Collision, Death, Spawn,
+    ReplayRecordStart, ReplayRecordStop,
+    ReplayPlaybackStart, ReplayPlaybackStop, ReplayPlaybackSpeed
+};
 enum class EventPriority { Low = 0, Normal = 1, High = 2, Critical = 3 };
 
 struct GameEvent {
