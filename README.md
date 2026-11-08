@@ -84,7 +84,7 @@ make
 #### To run the **tests**:
 
 ```bash
-make check          # Rebuilds and runs the networked event tests
+make check          # Rebuilds and runs the networked event and replay tests
 make test           # Runs the tests without rebuilding
 
 ```
@@ -146,3 +146,6 @@ Each experiment changes one factor and keeps the others fixed. Every condition i
 * **T** — Toggle Resolution Scaling (Proportional vs. Pixel)
 * **P** — Pause / Unpause
 * **+ / -** — Increase / Decrease game speed
+* **R** — Start / Stop recording a replay
+* **V** — Play the replay / Stop playback (the live game is frozen while it plays)
+* **+ / -** during playback — Replay speed (0.5x, 1x, 2x)

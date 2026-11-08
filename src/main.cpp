@@ -15,6 +15,7 @@
 #include "Scaling.h"
 #include "Timeline.h"
 #include "EventManager.h"
+#include "ReplaySystem.h"
 #include "SharedData.h"
 #include "Networking.h"
 #include "GameObjectFactory.h"
@@ -37,6 +38,11 @@ const int PORTAL_FRAME_H = 128;
 const int TOTEM_FRAME_COUNT = 8;
 const int TOTEM_FRAME_W = 64;
 const int TOTEM_FRAME_H = 192;
+
+// Milestone 4 Section 1.3: IDs used for objects in replay frames.
+// Players use their client ID (1-4).
+const int REPLAY_SKULL_ID = 100;
+const int REPLAY_PLATFORM_ID = 101;
 
 // Platform patrol boundaries
 const float PLATFORM_MIN_X = 600.0f;
@@ -330,6 +336,78 @@ int main(int argc, char *argv[])
                         PORTAL_SPAWN_X, PORTAL_SPAWN_Y);
     events.dispatch();
 
+    // Milestone 4 Section 1.3: Replay system, built on the event manager.
+    // It is controlled only by replay events (see ReplaySystem.h):
+    //   R = start / stop recording
+    //   V = start / stop playback
+    //   - / = during playback change the replay speed (0.5x, 1x, 2x)
+    ReplaySystem replay(events, [&]() { return gameTime.getTime(); });
+
+    // Recording and playback run on their own real-time Timeline, so the replay
+    // speed does not depend on the game timeline's pause or speed settings.
+    Timeline replayClock;
+
+    // Other players' positions while a replay is playing
+    std::vector<ReplayObjectState> replayRemotePlayers;
+
+    // What one frame of the recording stores
+    replay.setSnapshotSource([&]() {
+        std::vector<ReplayObjectState> objects;
+        const auto* velocity = player.getComponent<VelocityComponent>();
+        objects.push_back({clientID, go::getX(player), go::getY(player),
+                           velocity ? velocity->vx : 0.0f, velocity ? velocity->vy : 0.0f});
+        objects.push_back({REPLAY_SKULL_ID, enemySkull.getX(), enemySkull.getY(), 0.0f, 0.0f});
+        objects.push_back({REPLAY_PLATFORM_ID, go::getX(platform), go::getY(platform), 0.0f, 0.0f});
+        std::lock_guard<std::mutex> lock(sharedData.playerMutex);
+        for (const auto& entry : sharedData.remotePlayers) {
+            objects.push_back({entry.first, entry.second.x, entry.second.y, 0.0f, 0.0f});
+        }
+        return objects;
+    });
+
+    // How a recorded frame is shown (also used to restore the live game afterwards)
+    replay.setApplyFrame([&](const ReplayFrame& frame) {
+        replayRemotePlayers.clear();
+        for (const ReplayObjectState& o : frame.objects) {
+            if (o.id == clientID) {
+                go::setPosition(player, o.x, o.y);
+                go::setVelocity(player, o.vx, o.vy);
+            } else if (o.id == REPLAY_SKULL_ID) {
+                enemySkull.setPosition(o.x, o.y);
+            } else if (o.id == REPLAY_PLATFORM_ID) {
+                go::setPosition(platform, o.x, o.y);
+                previousPlatformX = o.x;
+            } else {
+                replayRemotePlayers.push_back(o);
+            }
+        }
+    });
+
+    // Recorded gameplay events are shown again at the moment they happened.
+    // Input events are skipped because there is one for every frame a key is held.
+    replay.setEventPlayback([&](const GameEvent& e) {
+        const char* name = nullptr;
+        switch (e.type) {
+            case EventType::Collision: name = "Collision"; break;
+            case EventType::Death: name = "Death"; break;
+            case EventType::Spawn: name = "Spawn"; break;
+            default: break;
+        }
+        if (!name) return;
+        std::string who = (e.sourceId == clientID) ? "you" : "player " + std::to_string(e.sourceId);
+        std::string text = std::string("REPLAY ") + name + ": " + e.detail + " (" + who + ")";
+        // A collision is raised every frame while touching; show it once while it is on screen
+        for (const Notice& n : notices) {
+            if (n.text == text) return;
+        }
+        addNotice(text);
+    });
+
+    replay.setStatusCallback([&](const std::string& text) { addNotice(text); });
+
+    bool recordKeyWasPressed = false;
+    bool playKeyWasPressed = false;
+
     // Used so one key press only triggers once
     bool pauseKeyWasPressed = false;
     bool minusKeyWasPressed = false;
@@ -376,8 +454,15 @@ int main(int argc, char *argv[])
         // Timeline scaling
         bool minusKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_MINUS);
         bool plusKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_EQUALS);
+        // Milestone 4 Section 1.3: during playback, - and = change the replay speed
+        if (replay.isPlaying()) {
+            if (minusKeyIsPressed && !minusKeyWasPressed)
+                replay.requestSpeed(replay.speed() > 1.0f ? 1.0f : 0.5f);
+            if (plusKeyIsPressed && !plusKeyWasPressed)
+                replay.requestSpeed(replay.speed() < 1.0f ? 1.0f : 2.0f);
+        }
         // Decrease: 2.0x -> 1.0x -> 0.5x
-        if (minusKeyIsPressed && !minusKeyWasPressed) {
+        else if (minusKeyIsPressed && !minusKeyWasPressed) {
             double currentScale = gameTime.getScale();
 
             if (currentScale == 2.0) {
@@ -390,7 +475,7 @@ int main(int argc, char *argv[])
             SDL_Log("Game time scale: %.1fx",gameTime.getScale());
         }
         // Increase: 0.5x -> 1.0x -> 2.0x
-        if (plusKeyIsPressed && !plusKeyWasPressed) {
+        if (!replay.isPlaying() && plusKeyIsPressed && !plusKeyWasPressed) {
             double currentScale =
                 gameTime.getScale();
 
@@ -433,6 +518,29 @@ int main(int argc, char *argv[])
         if (Input::isKeyPressed(SDL_SCANCODE_LSHIFT) || Input::isKeyPressed(SDL_SCANCODE_RSHIFT)) {
             moveSpeed = RUN_SPEED;
         }
+
+        // Milestone 4 Section 1.3: replay keys only RAISE replay events.
+        // The replay system handles them during dispatch.
+        bool recordKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_R);
+        if (recordKeyIsPressed && !recordKeyWasPressed) {
+            if (replay.isRecording()) replay.requestRecordStop();
+            else replay.requestRecordStart();
+        }
+        recordKeyWasPressed = recordKeyIsPressed;
+
+        bool playKeyIsPressed = Input::isKeyPressed(SDL_SCANCODE_V);
+        if (playKeyIsPressed && !playKeyWasPressed) {
+            if (replay.isPlaying()) replay.requestPlaybackStop();
+            else replay.requestPlaybackStart(1.0f);
+        }
+        playKeyWasPressed = playKeyIsPressed;
+
+        // Called every frame so the replay clock never jumps
+        double replayDelta = replayClock.getDeltaTime();
+
+        // While a replay plays, the live game is frozen: no input, physics,
+        // collisions or movers. The replay system moves the objects instead.
+        if (!replay.isPlaying()) {
 
         if (!gameTime.isPaused()) {
             // SDL is polled for key state only; gameplay is handled by our event queue.
@@ -553,6 +661,14 @@ int main(int argc, char *argv[])
         // Keep the enemy at its existing vertical position
         enemySkull.setPosition(synchronizedSkullX, enemySkull.getY());
 
+        } // end of live simulation (skipped during replay playback)
+
+        // Milestone 4 Section 1.3: record this frame, or move the playback forward.
+        // Both use the real-time replay clock, so the replay shows exactly what
+        // was on screen (a pause or a 2x game speed is recorded as it looked).
+        replay.update(replayDelta);
+        events.dispatch(); // handles replay events raised this frame
+
         // Background color
         SDL_SetRenderDrawColor(renderer, 169, 186, 157, 255);
 
@@ -611,8 +727,18 @@ int main(int argc, char *argv[])
         enemySkull.render(renderer);
         go::render(platform, renderer);
 
+        // Milestone 4 Section 1.3: during playback, draw the recorded positions
+        // of the other players instead of their live positions.
+        if (replay.isPlaying()) {
+            for (const ReplayObjectState& remote : replayRemotePlayers) {
+                GameObject remotePlayer = makePlayer(remote.id, remote.x, remote.y, go::getWidth(player), go::getHeight(player));
+                go::setTexture(remotePlayer, playerTexture);
+                go::setSpriteSheet(remotePlayer, 8, 128, 128);
+                go::render(remotePlayer, renderer);
+            }
+        }
         // Render positions received directly from remote peers
-        {
+        else {
             std::lock_guard<std::mutex> lock(sharedData.playerMutex);
 
             for (const auto& entry : sharedData.remotePlayers) {
@@ -637,6 +763,23 @@ int main(int argc, char *argv[])
             const Uint64 nowTicks = SDL_GetTicks();
             notices.erase(std::remove_if(notices.begin(), notices.end(),
                 [nowTicks](const Notice& n) { return n.expiresAt <= nowTicks; }), notices.end());
+
+            // Milestone 4 Section 1.3: replay status line
+            std::string replayText;
+            if (replay.isRecording()) {
+                replayText = "REC " + std::to_string(replay.durationMs() / 1000) + "s  (R = stop)";
+            } else if (replay.isPlaying()) {
+                char buffer[96];
+                SDL_snprintf(buffer, sizeof(buffer), "REPLAY %.1fs / %.1fs  speed %.1fx  (V = stop, -/= speed)",
+                             replay.playbackPositionMs() / 1000.0, replay.durationMs() / 1000.0, replay.speed());
+                replayText = buffer;
+            } else {
+                replayText = replay.hasRecording() ? "R = record   V = play replay" : "R = record";
+            }
+            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+            int outputWidth = 0, outputHeight = 0;
+            SDL_GetRenderOutputSize(renderer, &outputWidth, &outputHeight);
+            SDL_RenderDebugText(renderer, 10.0f, outputHeight - 20.0f, replayText.c_str());
 
             SDL_SetRenderDrawColor(renderer, 200, 30, 30, 255);
             float textY = 10.0f;
