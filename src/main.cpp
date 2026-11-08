@@ -11,6 +11,7 @@
 #include "Collision.h"
 #include "Scaling.h"
 #include "Timeline.h"
+#include "EventManager.h"
 #include "SharedData.h"
 #include "Networking.h"
 #include "GameObjectFactory.h"
@@ -247,6 +248,48 @@ int main(int argc, char *argv[])
     // Game timeline anchored to real time
     Timeline gameTime;
 
+    // Milestone 4 Section 1.1: each P2P client owns an event manager.
+    EventManager events;
+    auto raiseEvent = [&](EventType type, EventPriority priority,
+                          const std::string& detail, float x = 0.0f, float y = 0.0f) {
+        events.raise(GameEvent{type, priority, gameTime.getTime(), clientID,
+                               clientID, detail, x, y});
+    };
+
+    // Event handlers update the game state, rather than collision/input code
+    // directly performing those actions.
+    events.subscribe(EventType::Input, [&](const GameEvent& e) {
+        if (e.detail == "jump") physics.jump(player, 650.0f);
+        else if (e.detail == "left") go::move(player, -e.x, 0.0f);
+        else if (e.detail == "right") go::move(player, e.x, 0.0f);
+        else if (e.detail == "attack") SDL_Log("Input event: attack");
+        else if (e.detail == "crouch") SDL_Log("Input event: crouch");
+    });
+    events.subscribe(EventType::Collision, [&](const GameEvent& e) {
+        if (e.detail == "totem") {
+            if (Input::isKeyPressed(SDL_SCANCODE_A)) go::move(player, e.x, 0.0f);
+            if (Input::isKeyPressed(SDL_SCANCODE_D)) go::move(player, -e.x, 0.0f);
+        } else if (e.detail == "enemy") {
+            SDL_Log("Collision event: player touched enemy");
+            raiseEvent(EventType::Death, EventPriority::Critical, "enemy");
+        }
+    });
+    events.subscribe(EventType::Death, [&](const GameEvent& e) {
+        SDL_Log("Death event (%s): respawn requested", e.detail.c_str());
+        raiseEvent(EventType::Spawn, EventPriority::High, "portal",
+                   PORTAL_SPAWN_X, PORTAL_SPAWN_Y);
+    });
+    events.subscribe(EventType::Spawn, [&](const GameEvent& e) {
+        go::setPosition(player, e.x, e.y);
+        go::setVelocity(player, 0.0f, 0.0f);
+        go::setGrounded(player, true);
+        SDL_Log("Spawn event: player returned to portal");
+    });
+    // Spawn event at startup demonstrates registration/raising/handling.
+    raiseEvent(EventType::Spawn, EventPriority::High, "initial",
+               PORTAL_SPAWN_X, PORTAL_SPAWN_Y);
+    events.dispatch();
+
     // Used so one key press only triggers once
     bool pauseKeyWasPressed = false;
     bool minusKeyWasPressed = false;
@@ -352,31 +395,25 @@ int main(int argc, char *argv[])
         }
 
         if (!gameTime.isPaused()) {
-            // Jump
-            if (Input::isKeyPressed(SDL_SCANCODE_W)) {
-                physics.jump(player,650.0f);
-            }
-
-            // Move left
-            if (Input::isKeyPressed(SDL_SCANCODE_A)) {
-                go::move(player, -moveSpeed * deltaTime,0.0f);
-            }
-
-            // Move right
-            if (Input::isKeyPressed(SDL_SCANCODE_D)) {
-                go::move(player, moveSpeed * deltaTime,0.0f);
-            }
-
-            // Crouch placeholder
-            if (Input::isKeyPressed(SDL_SCANCODE_S)) {
-                SDL_Log("S pressed - crouch action");
-            }
-
-            // Attack placeholder
-            if (Input::isKeyPressed(SDL_SCANCODE_SPACE)) {
-                SDL_Log("Attack!");
-            }
+            // SDL is polled for key state only; gameplay is handled by our event queue.
+            if (Input::isKeyPressed(SDL_SCANCODE_W))
+                raiseEvent(EventType::Input, EventPriority::Normal, "jump");
+            if (Input::isKeyPressed(SDL_SCANCODE_A))
+                raiseEvent(EventType::Input, EventPriority::Normal, "left", moveSpeed * deltaTime);
+            if (Input::isKeyPressed(SDL_SCANCODE_D))
+                raiseEvent(EventType::Input, EventPriority::Normal, "right", moveSpeed * deltaTime);
+            // Edge-trigger nonmovement inputs to avoid flooding the queue.
+            static bool wasCrouch = false, wasAttack = false;
+            bool crouch = Input::isKeyPressed(SDL_SCANCODE_S);
+            bool attack = Input::isKeyPressed(SDL_SCANCODE_SPACE);
+            if (crouch && !wasCrouch)
+                raiseEvent(EventType::Input, EventPriority::Normal, "crouch");
+            if (attack && !wasAttack)
+                raiseEvent(EventType::Input, EventPriority::Normal, "attack");
+            wasCrouch = crouch;
+            wasAttack = attack;
         }
+        events.dispatch(); // Apply queued input before physics.
 
         // Update physics
         physics.update(player,deltaTime);
@@ -428,34 +465,22 @@ int main(int argc, char *argv[])
             go::setGrounded(player, true);
         }
 
-        // Fall reset
-        if (go::getY(player) > actualHeight) {
-            SDL_Log("Player fell! Respawning at the portal.");
+        // Detect gameplay conditions and raise events, not direct actions.
+        if (go::getY(player) > actualHeight)
+            raiseEvent(EventType::Death, EventPriority::Critical, "fall");
 
-            go::setPosition(player, PORTAL_SPAWN_X,PORTAL_SPAWN_Y);
-            go::setVelocity(player, 0.0f,0.0f);
-            go::setGrounded(player, true);
-        }
+        if (Collision::checkCollision(player, totem))
+            raiseEvent(EventType::Collision, EventPriority::Normal,
+                       "totem", moveSpeed * deltaTime);
 
-        // Totem collision
-        if (Collision::checkCollision(player,totem)) {
-            if (Input::isKeyPressed(SDL_SCANCODE_A)) {
-                go::move(player, moveSpeed * deltaTime,0.0f);
-            }
+        if (Collision::checkCollision(player, enemySkull))
+            raiseEvent(EventType::Collision, EventPriority::High, "enemy");
 
-            if (Input::isKeyPressed(SDL_SCANCODE_D)) {
-                go::move(player, -moveSpeed * deltaTime,0.0f);
-            }
-        }
-
-        // Enemy collision
-        if (Collision::checkCollision(player,enemySkull)) {
-            SDL_Log("Player touched an enemy! Respawning at the portal.");
-
-            go::setPosition(player, PORTAL_SPAWN_X,PORTAL_SPAWN_Y);
-            go::setVelocity(player, 0.0f,0.0f);
-            go::setGrounded(player, true);
-        }
+        // Death/Spawn raised by handlers are handled on the next dispatch.
+        // Three passes resolve collision -> death -> spawn in this frame.
+        events.dispatch();
+        events.dispatch();
+        events.dispatch();
 
         // Share local player position
         {
