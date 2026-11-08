@@ -6,9 +6,10 @@
 #include <chrono>
 #include <cstdint>
 #include <vector>
+#include <deque>
 
-// Milestone 3 Section C.1: which data format this client sends (TEXT or BINARY)
-#include "NetworkFormat.h"
+#include "NetworkFormat.h" // Milestone 3 Section C.1: which data format this client sends (TEXT or BINARY)
+#include "EventManager.h" // Milestone 4 Section 1.2: events shared across the network
 
 // Structure holding location data for remote peers
 struct RemotePlayerState {
@@ -43,6 +44,20 @@ struct SharedData {
         std::atomic<uint64_t> messagesReceived{0};// messages decoded
         std::atomic<uint64_t> decodeNanos{0}; // time spent parsing messages
     } stats;
+
+    // Milestone 4 Section 1.2: Networked events
+    // The game thread puts events here; the networking thread sends them.
+    std::deque<GameEvent> outgoingEvents;
+    std::mutex eventMutex; // protects outgoingEvents
+
+    // Events received from other clients are raised on this manager
+    EventManager* eventManager = nullptr;
+
+    // Called by the game thread to send an event to all other clients
+    void queueOutgoingEvent(const GameEvent& event) {
+        std::lock_guard<std::mutex> lock(eventMutex);
+        outgoingEvents.push_back(event);
+    }
 
     // Local player's latest position
     float playerX = 0.0f;

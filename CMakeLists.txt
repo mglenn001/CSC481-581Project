@@ -82,7 +82,7 @@ target_link_libraries(
 # distorted by an unoptimized (Debug) build.
 add_executable(
     benchmark
-    src/Benchmark.cpp
+    src/benchmark.cpp
     src/Networking.cpp
 )
  
@@ -106,3 +106,40 @@ target_link_libraries(
 )
  
 target_compile_options(benchmark PRIVATE -O2)
+
+# M4 S1.2: Headless test for networked events (no SDL needed)
+enable_testing()
+
+add_executable(
+    test_network_events
+    tests/test_network_events.cpp
+    src/Networking.cpp
+)
+
+target_include_directories(
+    test_network_events
+    PRIVATE
+    ${CPPZMQ_INCLUDE_DIR}
+    ${ZMQ_INCLUDE_DIRS}
+)
+
+target_link_directories(
+    test_network_events
+    PRIVATE
+    ${ZMQ_LIBRARY_DIRS}
+)
+
+target_link_libraries(
+    test_network_events
+    PRIVATE
+    ${ZMQ_LIBRARIES}
+)
+
+add_test(NAME network_events COMMAND test_network_events)
+
+# "make test" only runs tests; "make check" rebuilds the test first, then runs it
+add_custom_target(
+    check
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+    DEPENDS test_network_events
+)

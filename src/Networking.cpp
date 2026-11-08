@@ -1,4 +1,5 @@
 #include "Networking.h"
+#include "NetworkEvent.h"
 
 #include <zmq.hpp>
 #include <sstream>
@@ -8,6 +9,7 @@
 #include <iostream>
 #include <cstring>
 #include <vector>
+#include <deque>
 
 // Section 5: Ports used for direct peer-to-peer communication.
 #define PEER_BASE_PORT 6000
@@ -95,6 +97,20 @@ void networkingThread(
             sharedData.stats.bytesSent += peerString.size() + objectString.size();
             sharedData.stats.encodeNanos += std::chrono::duration_cast<std::chrono::nanoseconds>(encodeEnd - encodeStart).count();
 
+            // Milestone 4 Section 1.2: Send queued game events to the other clients.
+            // Events are always sent as text, whatever the position format is.
+            {
+                std::deque<GameEvent> toSend;
+                {
+                    std::lock_guard<std::mutex> lock(sharedData.eventMutex);
+                    toSend.swap(sharedData.outgoingEvents); // take all, release lock fast
+                }
+                for (const GameEvent& event : toSend) {
+                    std::string eventString = NetEvent::encode(event);
+                    peerPublisher.send(zmq::buffer(eventString), zmq::send_flags::none);
+                }
+            }
+
             // Section 5: Non-blocking loop to receive messages from all other peers
             while (true) {
                 zmq::message_t peerMessage;
@@ -104,6 +120,22 @@ void networkingThread(
 
                 // No more pending messages from peers
                 if (!peerResult) { break; }
+
+                // Milestone 4 Section 1.2: A networked event from another client.
+                // Raise it on our own EventManager.
+                if (NetEvent::isEventMessage(peerMessage.data(), peerMessage.size())) {
+                    GameEvent remoteEvent;
+                    if (sharedData.eventManager &&
+                        NetEvent::decode(peerMessage.data(), peerMessage.size(), remoteEvent) &&
+                        remoteEvent.sourceId != clientID &&
+                        remoteEvent.sourceId >= 1 && remoteEvent.sourceId <= TOTAL_PEERS) {
+                        // The sender's Timeline is not comparable to ours, so the
+                        // timestamp is reset. Priority and arrival order still apply.
+                        remoteEvent.timestamp = 0;
+                        sharedData.eventManager->raise(std::move(remoteEvent));
+                    }
+                    continue; // done with this message
+                }
 
                 int remoteID;
                 float remoteX;
