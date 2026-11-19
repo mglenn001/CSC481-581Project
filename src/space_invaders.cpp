@@ -1,7 +1,7 @@
 /* Space Invaders game
  *
- * The game features three levels of increasing difficulty, with invaders moving faster and shooting more frequently.
- * The player has a limited number of lives and must clear all invaders to progress to the next level.
+ * Three levels with faster and busier invaders.
+ * You have limited lives and clear each level by beating all invaders.
  */
 
 #include <SDL3/SDL.h>
@@ -11,82 +11,96 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <iostream>
 #include <string>
 #include <vector>
 
-// ---------- Settings ----------
-const int   W = 800;             // window width
-const int   H = 600;             // window height
-const float PLAYER_SPEED = 320;  // ship speed
-const float BULLET_SPEED = 520;  // player bullet speed
-const float ENEMY_BULLET_SPEED = 260;
-const float DROP = 22;           // how far invaders move down at the edge
-const float EDGE = 40;           // distance from the screen edge
+#include "GameObject.h"
+#include "Components.h"
+#include "GameObjectOps.h"
+#include "Physics.h"
+#include "Collision.h"
+#include "Input.h"
+#include "Timeline.h"
+#include "EventManager.h"
 
-// Sprite sheet layout (measured on a 1536 x 1024 picture).
-// These are the center of each frame. Change them if the sprites look cut off.
+// Basic game numbers
+const int   W = 800;             // Screen width
+const int   H = 600;             // Screen height
+const float PLAYER_SPEED = 320;  // Ship move speed
+const float BULLET_SPEED = 520;  // Player shot speed
+const float ENEMY_BULLET_SPEED = 260; // Enemy shot speed
+const float DROP = 22;           // How far invaders drop at an edge
+const float EDGE = 40;           // Space kept from left and right edges
+
+// Spots on the 1536 x 1024 sprite sheet
 const float REF_W = 1536, REF_H = 1024;
-const float INV_X[6] = {175, 430, 677, 910, 1140, 1365};   // invaders: column centers
-const float INV_Y[4] = {165, 378, 590, 818};               // invaders: row centers
-const float SHIP_X[6] = {145, 398, 650, 895, 1145, 1395};  // ship: column centers
-const float SHIP_Y[2] = {320, 680};                        // ship: row centers
-const float CROP = 240;                                    // size of one frame in the picture
+const float INV_X[6] = {175, 430, 677, 910, 1140, 1365};   // Invader column centers
+const float INV_Y[4] = {165, 378, 590, 818};               // Invader row centers
+const float SHIP_X[6] = {145, 398, 650, 895, 1145, 1395};  // Ship column centers
+const float SHIP_Y[2] = {320, 680};                        // Ship row centers
+const float CROP = 240;                                    // One picture box size
 
-// Level settings
+// Settings for each level
 struct Level {
     int   rows, cols;
-    float speed; // invader speed (pixels per second)
-    float shotGap; // average seconds between enemy shots
-    int   maxPlayerBullets;
-    int   topRowHp; // hits needed for the top row
+    float speed;            // Invader side speed per second
+    float shotGap;          // Average seconds between enemy shots
+    int   maxPlayerBullets; // Max shots on screen at once
+    int   topRowHp;         // Hits needed to hurt top row
 };
 
 const Level LEVELS[3] = {
-    {2,  6, 40.f, 1.6f, 3, 1}, // easy
-    {3,  8, 65.f, 1.0f, 2, 1}, // medium
-    {4, 10, 90.f, 0.6f, 2, 2}  // hard
+    {2,  6, 40.f, 1.6f, 3, 1}, // Easy
+    {3,  8, 65.f, 1.0f, 2, 1}, // Medium
+    {4, 10, 90.f, 0.6f, 2, 2}  // Hard
 };
 
-// Game objects
+// Invader life stages
 enum InvState { INV_ALIVE, INV_DYING, INV_GONE };
 
-struct Invader {
-    float x, y; // center
-    int row, col;
-    int hp;
-    InvState state;
-    float t; // time spent dying
+// Extra data stored on each invader
+struct InvaderComponent : public Component {
+    int row = 0;
+    int col = 0;
+    int hp = 1;
+    InvState state = INV_ALIVE;
+    float t = 0.0f; // Time spent blowing up
 };
 
-struct Bullet {
-    float x, y, vy;
-    bool alive;
+// Extra data stored on each bullet
+struct BulletComponent : public Component {
+    bool fromPlayer = true;
+    bool alive = true;
 };
 
+// Screens and game states
 enum GameState { TITLE, PLAYING, LEVEL_CLEAR, GAME_OVER, WIN };
 
-// Check if two boxes touch (boxes use center x,y and width,height)
-bool overlap(float ax, float ay, float aw, float ah,
-             float bx, float by, float bw, float bh) {
-    return fabsf(ax - bx) * 2 < (aw + bw) && fabsf(ay - by) * 2 < (ah + bh);
-}
-
+// Random number from 0.0 to 1.0
 float rand01() { return (float)rand() / (float)RAND_MAX; }
 
-// Resolve an asset path relative to the executable location so running inside
-// the ignored "build" folder finds the top-level "assets" folder reliably.
+// Make a temporary box around a center point for hit checks
+GameObject makeHitbox(float cx, float cy, float w, float h) {
+    GameObject box("hitbox");
+    box.addComponent<TransformComponent>(cx - w * 0.5f, cy - h * 0.5f, w, h);
+    box.addComponent<CollidableComponent>();
+    return box;
+}
+
+// Find the assets folder whether running from build/ or next to the app
 std::string resolveAssetPath(const char* relativeAsset) {
     const char* basePath = SDL_GetBasePath();
     if (basePath) {
         std::string base(basePath);
 
-        // Case 1: binary is in <project_root>/build/ -> assets is at <base>../assets/...
+        // Check parent folder when inside build/
         std::string fromBuild = base + "../" + relativeAsset;
         if (SDL_GetPathInfo(fromBuild.c_str(), nullptr)) {
             return fromBuild;
         }
 
-        // Case 2: assets sits right next to the executable
+        // Check right next to the app
         std::string nextToExe = base + relativeAsset;
         if (SDL_GetPathInfo(nextToExe.c_str(), nullptr)) {
             return nextToExe;
@@ -95,7 +109,35 @@ std::string resolveAssetPath(const char* relativeAsset) {
     return std::string(relativeAsset);
 }
 
-// The game
+// Make one invader object with its parts
+GameObject makeInvader(float x, float y, int row, int col, int hp, SDL_Texture* tex) {
+    GameObject obj("invader", row * 100 + col);
+    obj.addComponent<TransformComponent>(x, y, 64.0f, 56.0f);
+    obj.addComponent<VelocityComponent>();
+    obj.addComponent<CollidableComponent>();
+    auto& r = obj.addComponent<RenderableComponent>();
+    r.texture = tex;
+    auto& inv = obj.addComponent<InvaderComponent>();
+    inv.row = row;
+    inv.col = col;
+    inv.hp = hp;
+    return obj;
+}
+
+// Make one bullet object for player or enemy
+GameObject makeBullet(float x, float y, float vy, bool fromPlayer) {
+    GameObject obj("bullet");
+    obj.addComponent<TransformComponent>(x, y, 6.0f, 16.0f);
+    auto& v = obj.addComponent<VelocityComponent>();
+    v.vy = vy;
+    obj.addComponent<CollidableComponent>();
+    obj.addComponent<RenderableComponent>();
+    auto& b = obj.addComponent<BulletComponent>();
+    b.fromPlayer = fromPlayer;
+    b.alive = true;
+    return obj;
+}
+
 struct Game {
     SDL_Window*   window = nullptr;
     SDL_Renderer* renderer = nullptr;
@@ -103,30 +145,68 @@ struct Game {
     SDL_Texture*  texShip = nullptr;
     SDL_Texture*  texBg = nullptr;
 
+    Physics physics{0.0f};   // No gravity in space
+    Timeline timeline{1.0};  // Clock in seconds
+    EventManager events;       // Event queue and listeners
     GameState state = TITLE;
-    int   level = 0; // 0, 1, 2
+    int   level = 0;
     int   score = 0;
     int   lives = 3;
 
-    // Player
-    float px = W / 2.f, py = H - 50.f;
+    // Player state
+    GameObject player{"player", 1};
     float shootCooldown = 0;
-    float playerDeadTime = 0; // > 0 while the ship is exploding
+    float playerDeadTime = 0;
     bool  playerDead = false;
-    float invulnerable = 0; // short safe time after respawn
+    float invulnerable = 0;
 
-    // Invaders
-    std::vector<Invader> inv;
+    // Invader group state
+    std::vector<GameObject> inv;
     int   total = 0;
     float dir = 1; // 1 = right, -1 = left
     float shootTimer = 1;
-    float animClock = 0; // for the 2-frame walk animation
+    float animClock = 0;
 
-    std::vector<Bullet> playerBullets;
-    std::vector<Bullet> enemyBullets;
+    // Active shots
+    std::vector<GameObject> playerBullets;
+    std::vector<GameObject> enemyBullets;
 
-    float stateTimer = 0; // used by LEVEL_CLEAR
+    float stateTimer = 0; // Wait timer between levels
 
+    // Print simple messages to the terminal for key events
+    void setupEventLogs() {
+        events.subscribe(EventType::Input, [](const GameEvent& e) {
+            std::cout << "[t=" << e.timestamp << "] Input: " << e.detail << "\n";
+        });
+        events.subscribe(EventType::Spawn, [](const GameEvent& e) {
+            std::cout << "[t=" << e.timestamp << "] Spawn: " << e.detail << "\n";
+        });
+        events.subscribe(EventType::Collision, [](const GameEvent& e) {
+            std::cout << "[t=" << e.timestamp << "] Collision: " << e.detail << "\n";
+        });
+        events.subscribe(EventType::Death, [](const GameEvent& e) {
+            std::cout << "[t=" << e.timestamp << "] Death: " << e.detail << "\n";
+        });
+    }
+
+    // Queue an event with the current game time
+    void emitEvent(EventType type, const std::string& detail,
+                   float x = 0.0f, float y = 0.0f,
+                   EventPriority prio = EventPriority::Normal,
+                   int sourceId = 0, int targetId = 0) {
+        GameEvent ev;
+        ev.type = type;
+        ev.priority = prio;
+        ev.timestamp = timeline.getTime();
+        ev.sourceId = sourceId;
+        ev.targetId = targetId;
+        ev.detail = detail;
+        ev.x = x;
+        ev.y = y;
+        events.raise(std::move(ev));
+    }
+
+    // Load one image file into an SDL texture
     SDL_Texture* loadTexture(const char* relativeAsset) {
         std::string path = resolveAssetPath(relativeAsset);
         SDL_Texture* tex = IMG_LoadTexture(renderer, path.c_str());
@@ -137,7 +217,7 @@ struct Game {
         return tex;
     }
 
-    // Start up
+    // Start SDL, window, renderer, textures, and player parts
     bool init() {
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             SDL_Log("SDL_Init failed: %s", SDL_GetError());
@@ -164,9 +244,20 @@ struct Game {
         if (!texInvaders || !texShip || !texBg) {
             return false;
         }
+
+        // Add parts to the player ship
+        player.addComponent<TransformComponent>(W / 2.f, H - 50.f, 64.0f, 64.0f);
+        player.addComponent<VelocityComponent>();
+        player.addComponent<CollidableComponent>();
+        auto& pr = player.addComponent<RenderableComponent>();
+        pr.texture = texShip;
+
+        setupEventLogs();
+        timeline.getDeltaTime(); // Clear first frame time
         return true;
     }
 
+    // Clean up textures, window, and SDL
     void cleanup() {
         if (texInvaders) SDL_DestroyTexture(texInvaders);
         if (texShip)     SDL_DestroyTexture(texShip);
@@ -176,7 +267,7 @@ struct Game {
         SDL_Quit();
     }
 
-    // Set up a level
+    // Set up invaders and reset positions for level n
     void startLevel(int n) {
         level = n;
         const Level& L = LEVELS[level];
@@ -188,93 +279,142 @@ struct Game {
         float startX = W / 2.f - (L.cols - 1) * gapX / 2.f;
         for (int r = 0; r < L.rows; r++) {
             for (int c = 0; c < L.cols; c++) {
-                Invader i;
-                i.x = startX + c * gapX;
-                i.y = 90 + r * gapY;
-                i.row = r;
-                i.col = c;
-                i.hp = (r == 0) ? L.topRowHp : 1; // top row can be tougher
-                i.state = INV_ALIVE;
-                i.t = 0;
-                inv.push_back(i);
+                int hp = (r == 0) ? L.topRowHp : 1;
+                inv.push_back(makeInvader(startX + c * gapX, 90 + r * gapY,
+                                          r, c, hp, texInvaders));
             }
         }
         total = (int)inv.size();
         dir = 1;
         shootTimer = 1.0f;
-        px = W / 2.f;
+        go::setPosition(player, W / 2.f, H - 50.f);
+        go::setVelocity(player, 0.0f, 0.0f);
         playerDead = false;
         playerDeadTime = 0;
         invulnerable = 1.5f;
         state = PLAYING;
+
+        // Log new wave and player ship
+        emitEvent(EventType::Spawn,
+                  "Level " + std::to_string(level + 1) + " invaders", W / 2.f, 90.f);
+        emitEvent(EventType::Spawn, "Player ship", W / 2.f, H - 50.f, EventPriority::Normal, player.getId());
     }
 
+    // Start a fresh run from level 1
     void newGame() {
         score = 0;
         lives = 3;
         startLevel(0);
     }
 
+    // Count invaders still alive
     int aliveCount() {
         int n = 0;
-        for (auto& i : inv) if (i.state == INV_ALIVE) n++;
+        for (auto& obj : inv) {
+            auto* ic = obj.getComponent<InvaderComponent>();
+            if (ic && ic->state == INV_ALIVE) n++;
+        }
         return n;
     }
 
-    // Draw one frame from a sprite sheet
-    // cx, cy = where the center of the sprite goes. w, h = size on screen.
+    // Draw one cropped box from a sprite sheet
     void drawFrame(SDL_Texture* tex, float refCX, float refCY,
-                   float cx, float cy, float w, float h, bool flipHint = false) {
-        (void)flipHint;
+                   float cx, float cy, float w, float h) {
         float tw = 0.f, th = 0.f;
         SDL_GetTextureSize(tex, &tw, &th);
-        float sx = tw / REF_W, sy = th / REF_H; // in case the picture size is different
+        float sx = tw / REF_W, sy = th / REF_H;
 
-        SDL_FRect src;
-        src.w = CROP * sx;
-        src.h = CROP * sy;
-        src.x = refCX * sx - src.w * 0.5f;
-        src.y = refCY * sy - src.h * 0.5f;
-
+        SDL_FRect src{
+            refCX * sx - (CROP * sx) * 0.5f,
+            refCY * sy - (CROP * sy) * 0.5f,
+            CROP * sx,
+            CROP * sy
+        };
         SDL_FRect dst{cx - w * 0.5f, cy - h * 0.5f, w, h};
         SDL_RenderTexture(renderer, tex, &src, &dst);
     }
 
-    void drawInvader(const Invader& i) {
-        int color = i.row % 4; // each row has its own color
-        int frame;
-        if (i.state == INV_DYING) {
-            frame = 2 + std::min(3, (int)(i.t / 0.4f * 4)); // explosion frames 2 to 5
-        } else {
-            frame = ((int)(animClock * 2)) % 2; // walk frames 0 and 1
-        }
-        drawFrame(texInvaders, INV_X[frame], INV_Y[color], i.x, i.y, 64, 56);
+    // Draw one invader (walking or blowing up)
+    void drawInvader(const GameObject& obj) {
+        auto* ic = obj.getComponent<InvaderComponent>();
+        auto* rc = obj.getComponent<RenderableComponent>();
+        if (!ic || !rc || ic->state == INV_GONE) return;
+
+        int color = ic->row % 4;
+        int frame = (ic->state == INV_DYING)
+            ? 2 + std::min(3, (int)(ic->t / 0.4f * 4))
+            : ((int)(animClock * 2)) % 2;
+
+        drawFrame(rc->texture ? rc->texture : texInvaders,
+                  INV_X[frame], INV_Y[color],
+                  go::getX(obj), go::getY(obj),
+                  go::getWidth(obj), go::getHeight(obj));
     }
 
+    // Draw the ship or its explosion
     void drawPlayer() {
+        float px = go::getX(player);
+        float py = go::getY(player);
         if (playerDead) {
-            // ship explosion uses frames 1 to 11
             int idx = 1 + std::min(10, (int)(playerDeadTime / 1.0f * 11));
             drawFrame(texShip, SHIP_X[idx % 6], SHIP_Y[idx / 6], px, py, 64, 64);
         } else {
-            // blink while safe
+            // Blink while safe after respawn
             if (invulnerable > 0 && ((int)(invulnerable * 10)) % 2 == 0) return;
             drawFrame(texShip, SHIP_X[0], SHIP_Y[0], px, py, 64, 64);
         }
     }
 
-    // Input
+    // Handle single key presses like quit, pause, and start
     void handleKeyDown(SDL_Keycode k, bool& running) {
         if (k == SDLK_ESCAPE) running = false;
+        if (k == SDLK_P) {
+            if (state == PLAYING || state == LEVEL_CLEAR) {
+                if (timeline.isPaused()) {
+                    timeline.unpause();
+                    emitEvent(EventType::Input, "Unpaused game", 0.0f, 0.0f, EventPriority::High);
+                } else {
+                    timeline.pause();
+                    emitEvent(EventType::Input, "Paused game", 0.0f, 0.0f, EventPriority::High);
+                }
+            }
+        }
         if (k == SDLK_RETURN) {
-            if (state == TITLE || state == GAME_OVER || state == WIN) newGame();
+            if (state == TITLE || state == GAME_OVER || state == WIN) {
+                if (timeline.isPaused()) timeline.unpause();
+                newGame();
+            }
         }
     }
 
-    // Update
+    // Move bullets and remove ones that leave the screen
+    void updateBullets(std::vector<GameObject>& bullets, float dt, float minY, float maxY) {
+        for (auto& b : bullets) {
+            auto* bc = b.getComponent<BulletComponent>();
+            auto* vc = b.getComponent<VelocityComponent>();
+            auto* tc = b.getComponent<TransformComponent>();
+            if (!bc || !bc->alive || !vc || !tc) continue;
+
+            tc->x += vc->vx * dt;
+            tc->y += vc->vy * dt;
+            if (tc->y < minY || tc->y > maxY) bc->alive = false;
+        }
+        bullets.erase(
+            std::remove_if(bullets.begin(), bullets.end(), [](const GameObject& b) {
+                auto* bc = b.getComponent<BulletComponent>();
+                return !bc || !bc->alive;
+            }),
+            bullets.end()
+        );
+    }
+
+    // Step game timers, movement, shooting, hits, and win/lose checks
     void update(float dt) {
+        if (timeline.isPaused()) return;
+
         animClock += dt;
 
+        // Wait a moment after clearing a level
         if (state == LEVEL_CLEAR) {
             stateTimer -= dt;
             if (stateTimer <= 0) {
@@ -286,126 +426,173 @@ struct Game {
         if (state != PLAYING) return;
 
         const Level& L = LEVELS[level];
-        const bool* keys = SDL_GetKeyboardState(nullptr);
 
-        // Player
+        // Count down player timers
         if (invulnerable > 0) invulnerable -= dt;
         if (shootCooldown > 0) shootCooldown -= dt;
 
+        auto* pt = player.getComponent<TransformComponent>();
+        auto* pv = player.getComponent<VelocityComponent>();
+
         if (playerDead) {
+            // Wait through death animation, then respawn
+            if (pv) { pv->vx = 0.0f; pv->vy = 0.0f; }
             playerDeadTime += dt;
             if (playerDeadTime >= 1.0f) {
                 playerDead = false;
                 playerDeadTime = 0;
-                px = W / 2.f;
+                if (pt) { pt->x = W / 2.f; pt->y = H - 50.f; }
                 invulnerable = 2.0f;
                 enemyBullets.clear();
+                emitEvent(EventType::Spawn, "Player respawned", W / 2.f, H - 50.f,
+                          EventPriority::Normal, player.getId());
             }
         } else {
-            if (keys[SDL_SCANCODE_LEFT]  || keys[SDL_SCANCODE_A]) px -= PLAYER_SPEED * dt;
-            if (keys[SDL_SCANCODE_RIGHT] || keys[SDL_SCANCODE_D]) px += PLAYER_SPEED * dt;
-            px = std::max(30.f, std::min((float)W - 30.f, px));
+            // Move left with A and right with D (arrows left for teammate)
+            float vx = 0.0f;
+            if (Input::isKeyPressed(SDL_SCANCODE_A)) vx -= PLAYER_SPEED;
+            if (Input::isKeyPressed(SDL_SCANCODE_D)) vx += PLAYER_SPEED;
+            if (pv) { pv->vx = vx; pv->vy = 0.0f; }
 
-            if (keys[SDL_SCANCODE_SPACE] && shootCooldown <= 0 &&
-                (int)playerBullets.size() < L.maxPlayerBullets) {
-                playerBullets.push_back({px, py - 30, -BULLET_SPEED, true});
+            if (player.hasComponent<GravityComponent>()) {
+                physics.update(player, dt);
+            } else if (pt) {
+                pt->x += vx * dt;
+            }
+            if (pt) {
+                pt->x = std::max(30.f, std::min((float)W - 30.f, pt->x));
+            }
+
+            // Fire a player shot with Space
+            if (Input::isKeyPressed(SDL_SCANCODE_SPACE) && shootCooldown <= 0 &&
+                (int)playerBullets.size() < L.maxPlayerBullets && pt) {
+                playerBullets.push_back(makeBullet(pt->x, pt->y - 30, -BULLET_SPEED, true));
                 shootCooldown = 0.25f;
             }
         }
 
-        // Move invaders
+        // Move invaders sideways and drop down when hitting an edge
         int alive = aliveCount();
-        float speed = L.speed * (1.f + 1.5f * (1.f - (float)alive / total)); // faster when fewer
+        float speed = L.speed * (1.f + 1.5f * (1.f - (float)alive / total));
         bool hitEdge = false;
-        for (auto& i : inv) {
-            if (i.state != INV_ALIVE) continue;
-            i.x += dir * speed * dt;
-            if (i.x < EDGE || i.x > W - EDGE) hitEdge = true;
+        for (auto& obj : inv) {
+            auto* ic = obj.getComponent<InvaderComponent>();
+            auto* tc = obj.getComponent<TransformComponent>();
+            if (!ic || !tc || ic->state != INV_ALIVE) continue;
+            tc->x += dir * speed * dt;
+            if (tc->x < EDGE || tc->x > W - EDGE) hitEdge = true;
         }
         if (hitEdge) {
             dir = -dir;
-            for (auto& i : inv) {
-                if (i.state != INV_ALIVE) continue;
-                i.y += DROP;
-                i.x += dir * speed * dt * 2;   // step away from the edge
+            for (auto& obj : inv) {
+                auto* ic = obj.getComponent<InvaderComponent>();
+                auto* tc = obj.getComponent<TransformComponent>();
+                if (!ic || !tc || ic->state != INV_ALIVE) continue;
+                tc->y += DROP;
+                tc->x += dir * speed * dt * 2;
             }
         }
 
-        // Invaders shoot
+        // Pick a bottom invader in a random column to shoot
         shootTimer -= dt;
         if (shootTimer <= 0 && alive > 0) {
             shootTimer = L.shotGap * (0.5f + rand01());
-            // pick a random column, then use the lowest invader in it
-            Invader* shooter = nullptr;
+            GameObject* shooter = nullptr;
             int col = rand() % LEVELS[level].cols;
-            for (auto& i : inv) {
-                if (i.state == INV_ALIVE && i.col == col)
-                    if (!shooter || i.y > shooter->y) shooter = &i;
+            for (auto& obj : inv) {
+                auto* ic = obj.getComponent<InvaderComponent>();
+                if (ic && ic->state == INV_ALIVE && ic->col == col) {
+                    if (!shooter || go::getY(obj) > go::getY(*shooter)) shooter = &obj;
+                }
             }
-            if (!shooter) {   // that column is empty, so pick any alive invader
-                for (auto& i : inv) if (i.state == INV_ALIVE) { shooter = &i; break; }
+            if (!shooter) {
+                for (auto& obj : inv) {
+                    auto* ic = obj.getComponent<InvaderComponent>();
+                    if (ic && ic->state == INV_ALIVE) { shooter = &obj; break; }
+                }
             }
-            if (shooter) enemyBullets.push_back({shooter->x, shooter->y + 20, ENEMY_BULLET_SPEED, true});
+            if (shooter) {
+                enemyBullets.push_back(
+                    makeBullet(go::getX(*shooter), go::getY(*shooter) + 20, ENEMY_BULLET_SPEED, false)
+                );
+            }
         }
 
-        // Move bullets
-        for (auto& b : playerBullets) {
-            b.y += b.vy * dt;
-            if (b.y < -20) b.alive = false;
-        }
-        for (auto& b : enemyBullets) {
-            b.y += b.vy * dt;
-            if (b.y > H + 20) b.alive = false;
-        }
+        // Update player and enemy bullets
+        updateBullets(playerBullets, dt, -20.f, H + 20.f);
+        updateBullets(enemyBullets, dt, -20.f, H + 20.f);
 
-        // Player bullet hits invader
+        // Check if player bullets hit invaders
         for (auto& b : playerBullets) {
-            if (!b.alive) continue;
-            for (auto& i : inv) {
-                if (i.state != INV_ALIVE) continue;
-                if (overlap(b.x, b.y, 6, 16, i.x, i.y, 40, 30)) {
-                    b.alive = false;
-                    i.hp--;
-                    if (i.hp <= 0) {
-                        i.state = INV_DYING;
-                        i.t = 0;
-                        score += 10 * (4 - i.row);   // top rows give more points
+            auto* bc = b.getComponent<BulletComponent>();
+            if (!bc || !bc->alive) continue;
+            GameObject bulletBox = makeHitbox(go::getX(b), go::getY(b), 6.f, 16.f);
+
+            for (auto& obj : inv) {
+                auto* ic = obj.getComponent<InvaderComponent>();
+                if (!ic || ic->state != INV_ALIVE) continue;
+                GameObject invBox = makeHitbox(go::getX(obj), go::getY(obj), 40.f, 30.f);
+
+                if (Collision::checkCollision(bulletBox, invBox)) {
+                    bc->alive = false;
+                    ic->hp--;
+                    emitEvent(EventType::Collision,
+                              "Player shot hit invader",
+                              go::getX(obj), go::getY(obj), EventPriority::Normal,
+                              player.getId(), obj.getId());
+                    if (ic->hp <= 0) {
+                        ic->state = INV_DYING;
+                        ic->t = 0;
+                        score += 10 * (4 - ic->row);
+                        emitEvent(EventType::Death,
+                                  "Invader destroyed",
+                                  go::getX(obj), go::getY(obj), EventPriority::Normal,
+                                  obj.getId());
                     }
                     break;
                 }
             }
         }
 
-        // Enemy bullet hits player
-        if (!playerDead && invulnerable <= 0) {
+        // Check if enemy bullets hit the player ship
+        if (!playerDead && invulnerable <= 0 && pt) {
+            GameObject playerBox = makeHitbox(pt->x, pt->y, 40.f, 30.f);
             for (auto& b : enemyBullets) {
-                if (b.alive && overlap(b.x, b.y, 6, 16, px, py, 40, 30)) {
-                    b.alive = false;
+                auto* bc = b.getComponent<BulletComponent>();
+                if (!bc || !bc->alive) continue;
+                GameObject bulletBox = makeHitbox(go::getX(b), go::getY(b), 6.f, 16.f);
+
+                if (Collision::checkCollision(bulletBox, playerBox)) {
+                    bc->alive = false;
                     lives--;
                     playerDead = true;
                     playerDeadTime = 0;
+                    emitEvent(EventType::Collision, "Enemy bullet hit player ship",
+                              pt->x, pt->y, EventPriority::High, b.getId(), player.getId());
+                    emitEvent(EventType::Death,
+                              "Player ship destroyed (lives left: " + std::to_string(lives) + ")",
+                              pt->x, pt->y, EventPriority::Critical, player.getId());
                     break;
                 }
             }
         }
 
-        // Clean up dead bullets
-        playerBullets.erase(std::remove_if(playerBullets.begin(), playerBullets.end(),
-                            [](const Bullet& b) { return !b.alive; }), playerBullets.end());
-        enemyBullets.erase(std::remove_if(enemyBullets.begin(), enemyBullets.end(),
-                           [](const Bullet& b) { return !b.alive; }), enemyBullets.end());
-
-        // Dying invaders
-        for (auto& i : inv) {
-            if (i.state == INV_DYING) {
-                i.t += dt;
-                if (i.t >= 0.4f) i.state = INV_GONE;
+        // Finish dying animation after 0.4 seconds
+        for (auto& obj : inv) {
+            auto* ic = obj.getComponent<InvaderComponent>();
+            if (ic && ic->state == INV_DYING) {
+                ic->t += dt;
+                if (ic->t >= 0.4f) ic->state = INV_GONE;
             }
         }
 
-        // Lose: invaders reach the ship
-        for (auto& i : inv) {
-            if (i.state == INV_ALIVE && i.y + 20 >= py - 20) {
+        // Check if invaders reached the player or lives ran out
+        float py = pt ? pt->y : (H - 50.f);
+        for (auto& obj : inv) {
+            auto* ic = obj.getComponent<InvaderComponent>();
+            if (ic && ic->state == INV_ALIVE && go::getY(obj) + 20 >= py - 20) {
+                emitEvent(EventType::Death, "Invaders reached player line",
+                          go::getX(obj), go::getY(obj), EventPriority::Critical, obj.getId());
                 state = GAME_OVER;
                 return;
             }
@@ -415,57 +602,64 @@ struct Game {
             return;
         }
 
-        // win the level
+        // Move to level clear once all invaders are gone
         if (aliveCount() == 0) {
             state = LEVEL_CLEAR;
             stateTimer = 2.0f;
         }
     }
 
-    // Draw
+    // Draw one list of bullets as simple rectangles
+    void drawBulletList(const std::vector<GameObject>& bullets) {
+        for (const auto& b : bullets) {
+            auto* bc = b.getComponent<BulletComponent>();
+            if (!bc || !bc->alive) continue;
+            SDL_FRect r{go::getX(b) - 3.f, go::getY(b) - 8.f, 6.f, 16.f};
+            SDL_RenderFillRect(renderer, &r);
+        }
+    }
+
+    // Draw the background, ships, invaders, shots, and window title
     void render() {
-        SDL_RenderTexture(renderer, texBg, nullptr, nullptr); // background
+        SDL_RenderTexture(renderer, texBg, nullptr, nullptr);
 
         if (state == PLAYING || state == LEVEL_CLEAR) {
-            for (auto& i : inv)
-                if (i.state != INV_GONE) drawInvader(i);
+            for (const auto& obj : inv) drawInvader(obj);
             drawPlayer();
 
-            SDL_SetRenderDrawColor(renderer, 120, 255, 255, 255); // player bullets
-            for (auto& b : playerBullets) {
-                SDL_FRect r{b.x - 3.f, b.y - 8.f, 6.f, 16.f};
-                SDL_RenderFillRect(renderer, &r);
-            }
-            SDL_SetRenderDrawColor(renderer, 255, 160, 40, 255); // enemy bullets
-            for (auto& b : enemyBullets) {
-                SDL_FRect r{b.x - 3.f, b.y - 8.f, 6.f, 16.f};
-                SDL_RenderFillRect(renderer, &r);
-            }
+            SDL_SetRenderDrawColor(renderer, 120, 255, 255, 255);
+            drawBulletList(playerBullets);
+
+            SDL_SetRenderDrawColor(renderer, 255, 160, 40, 255);
+            drawBulletList(enemyBullets);
         }
 
-        // Show a few invaders on the title screen so it is not empty
+        // Sample invaders on the title screen
         if (state == TITLE) {
-            for (int c = 0; c < 4; c++)
+            for (int c = 0; c < 4; c++) {
                 drawFrame(texInvaders, INV_X[((int)(animClock * 2)) % 2], INV_Y[c],
                           W / 2.f - 135 + c * 90, H / 2.f, 64, 56);
+            }
         }
 
         SDL_RenderPresent(renderer);
         updateTitleText();
     }
 
-    // No font library yet, so we show text in the window title.
+    // Show score, level, and status in the window title bar
     void updateTitleText() {
         char t[200];
         const char* names[3] = {"Easy", "Medium", "Hard"};
+        const char* pausedSuffix = timeline.isPaused() ? "  [PAUSED - Press P]" : "";
         switch (state) {
             case TITLE:
                 snprintf(t, sizeof(t), "SPACE INVADERS - Press ENTER to start"); break;
             case PLAYING:
-                snprintf(t, sizeof(t), "Level %d (%s)  |  Score: %d  |  Lives: %d",
-                         level + 1, names[level], score, lives); break;
+                snprintf(t, sizeof(t), "Level %d (%s)  |  Score: %d  |  Lives: %d%s",
+                         level + 1, names[level], score, lives, pausedSuffix); break;
             case LEVEL_CLEAR:
-                snprintf(t, sizeof(t), "Level %d clear!  Score: %d", level + 1, score); break;
+                snprintf(t, sizeof(t), "Level %d clear!  Score: %d%s",
+                         level + 1, score, pausedSuffix); break;
             case GAME_OVER:
                 snprintf(t, sizeof(t), "GAME OVER  |  Score: %d  |  Press ENTER to retry", score); break;
             case WIN:
@@ -475,14 +669,13 @@ struct Game {
     }
 };
 
-// Main loop
+// Run the main event, update, event-dispatch, and draw loop
 int main(int, char**) {
     srand((unsigned)time(nullptr));
     Game game;
     if (!game.init()) { game.cleanup(); return 1; }
 
     bool running = true;
-    Uint64 last = SDL_GetTicks();
     while (running) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
@@ -491,12 +684,13 @@ int main(int, char**) {
                 game.handleKeyDown(e.key.key, running);
             }
         }
-        Uint64 now = SDL_GetTicks();
-        float dt = (now - last) / 1000.f;
-        last = now;
-        if (dt > 0.05f) dt = 0.05f;   // avoid big jumps
+
+        // Cap big frame jumps so things don't teleport
+        float dt = static_cast<float>(game.timeline.getDeltaTime());
+        if (dt > 0.05f) dt = 0.05f;
 
         game.update(dt);
+        game.events.dispatch();
         game.render();
     }
     game.cleanup();

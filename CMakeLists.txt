@@ -18,10 +18,29 @@ if(NOT CPPZMQ_INCLUDE_DIR)
     message(FATAL_ERROR "cppzmq not found")
 endif()
 
-# Space Invaders standalone single-player game (runs from build/, loads sprites from assets/)
+# Space Invaders standalone single-player game
 add_executable(
     space_invaders
     src/space_invaders.cpp
+    src/Entity.cpp
+    src/Physics.cpp
+    src/Input.cpp
+    src/Collision.cpp
+    src/Scaling.cpp
+    src/Timeline.cpp
+)
+
+target_include_directories(
+    space_invaders
+    PRIVATE
+    ${CPPZMQ_INCLUDE_DIR}
+    ${ZMQ_INCLUDE_DIRS}
+)
+
+target_link_directories(
+    space_invaders
+    PRIVATE
+    ${ZMQ_LIBRARY_DIRS}
 )
 
 target_link_libraries(
