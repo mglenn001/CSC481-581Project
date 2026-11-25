@@ -23,6 +23,7 @@
 #include "Input.h"
 #include "Timeline.h"
 #include "EventManager.h"
+#include "InputChords.h"   // Milestone 5 Section 2: input chords and sequences
 
 // Basic game numbers
 const int   W = 800;             // Screen width
@@ -32,6 +33,12 @@ const float BULLET_SPEED = 520;  // Player shot speed
 const float ENEMY_BULLET_SPEED = 260; // Enemy shot speed
 const float DROP = 22;           // How far invaders drop at an edge
 const float EDGE = 40;           // Space kept from left and right edges
+
+// Milestone 5 Section 2: chord moves
+const float DASH_DISTANCE = 170;     // Double-tap A or D: how far the ship dashes
+const float DASH_COOLDOWN = 0.6f;    // Seconds before the next dash
+const float SHIELD_TIME = 1.5f;      // A + D together: how long the shield lasts
+const float SHIELD_COOLDOWN = 5.0f;  // Seconds before the shield can be used again
 
 // Spots on the 1536 x 1024 sprite sheet
 const float REF_W = 1536, REF_H = 1024;
@@ -173,6 +180,48 @@ struct Game {
 
     float stateTimer = 0; // Wait timer between levels
 
+    // Milestone 5 Section 2: input chords
+    // The keys come from the same Input class the game already uses for A, D and Space.
+    ChordDetector chords{events, [](int key) { return Input::isKeyPressed(static_cast<SDL_Scancode>(key)); }};
+    float shieldTime = 0;       // > 0 while the shield is up
+    float shieldCooldown = 0;   // > 0 while the shield is recharging
+    float dashCooldown = 0;     // > 0 right after a dash
+    float dashTrail = 0;        // > 0 while the dash trail is drawn
+    float dashFromX = 0;        // where the last dash started
+
+    // Register the chords and what they do
+    void setupChords() {
+        // A + D pressed together (alone they move left and right)
+        chords.addChord("shield", {SDL_SCANCODE_A, SDL_SCANCODE_D}, 120);
+        // Double-tap A or D quickly (one tap only moves)
+        chords.addSequence("dash-left", {SDL_SCANCODE_A, SDL_SCANCODE_A}, 250);
+        chords.addSequence("dash-right", {SDL_SCANCODE_D, SDL_SCANCODE_D}, 250);
+
+        events.subscribe(EventType::InputChord, [this](const GameEvent& e) {
+            if (state != PLAYING || playerDead || timeline.isPaused()) return;
+            auto* pt = player.getComponent<TransformComponent>();
+            if (!pt) return;
+
+            if (e.detail == "shield") {
+                if (shieldCooldown > 0) {
+                    std::cout << "[t=" << e.timestamp << "] Chord: shield (still recharging)\n";
+                    return;
+                }
+                shieldTime = SHIELD_TIME;
+                shieldCooldown = SHIELD_COOLDOWN;
+                std::cout << "[t=" << e.timestamp << "] Chord: shield up\n";
+            } else if (e.detail == "dash-left" || e.detail == "dash-right") {
+                if (dashCooldown > 0) return;
+                float direction = (e.detail == "dash-left") ? -1.0f : 1.0f;
+                dashFromX = pt->x;
+                pt->x = std::max(30.f, std::min((float)W - 30.f, pt->x + direction * DASH_DISTANCE));
+                dashCooldown = DASH_COOLDOWN;
+                dashTrail = 0.2f;
+                std::cout << "[t=" << e.timestamp << "] Chord: " << e.detail << "\n";
+            }
+        });
+    }
+
     // Print simple messages to the terminal for key events
     void setupEventLogs() {
         events.subscribe(EventType::Input, [](const GameEvent& e) {
@@ -253,6 +302,7 @@ struct Game {
         pr.texture = texShip;
 
         setupEventLogs();
+        setupChords();
         timeline.getDeltaTime(); // Clear first frame time
         return true;
     }
@@ -292,6 +342,11 @@ struct Game {
         playerDead = false;
         playerDeadTime = 0;
         invulnerable = 1.5f;
+        shieldTime = 0;
+        shieldCooldown = 0;
+        dashCooldown = 0;
+        dashTrail = 0;
+        chords.reset();
         state = PLAYING;
 
         // Log new wave and player ship
@@ -430,12 +485,17 @@ struct Game {
         // Count down player timers
         if (invulnerable > 0) invulnerable -= dt;
         if (shootCooldown > 0) shootCooldown -= dt;
+        if (shieldTime > 0) shieldTime -= dt;
+        if (shieldCooldown > 0) shieldCooldown -= dt;
+        if (dashCooldown > 0) dashCooldown -= dt;
+        if (dashTrail > 0) dashTrail -= dt;
 
         auto* pt = player.getComponent<TransformComponent>();
         auto* pv = player.getComponent<VelocityComponent>();
 
         if (playerDead) {
             // Wait through death animation, then respawn
+            chords.reset();
             if (pv) { pv->vx = 0.0f; pv->vy = 0.0f; }
             playerDeadTime += dt;
             if (playerDeadTime >= 1.0f) {
@@ -448,6 +508,10 @@ struct Game {
                           EventPriority::Normal, player.getId());
             }
         } else {
+            // Milestone 5 Section 2: look for chords (A + D, double-tap A or D).
+            // They are raised as InputChord events and handled after this update.
+            chords.update(timeline.getTime(), player.getId());
+
             // Move left with A and right with D (arrows left for teammate)
             float vx = 0.0f;
             if (Input::isKeyPressed(SDL_SCANCODE_A)) vx -= PLAYER_SPEED;
@@ -554,8 +618,23 @@ struct Game {
             }
         }
 
+        // Milestone 5 Section 2: the shield destroys enemy bullets that reach it
+        if (!playerDead && shieldTime > 0 && pt) {
+            GameObject shieldBox = makeHitbox(pt->x, pt->y, 84.f, 84.f);
+            for (auto& b : enemyBullets) {
+                auto* bc = b.getComponent<BulletComponent>();
+                if (!bc || !bc->alive) continue;
+                GameObject bulletBox = makeHitbox(go::getX(b), go::getY(b), 6.f, 16.f);
+                if (Collision::checkCollision(bulletBox, shieldBox)) {
+                    bc->alive = false;
+                    emitEvent(EventType::Collision, "Enemy bullet blocked by shield",
+                              pt->x, pt->y, EventPriority::Normal, b.getId(), player.getId());
+                }
+            }
+        }
+
         // Check if enemy bullets hit the player ship
-        if (!playerDead && invulnerable <= 0 && pt) {
+        if (!playerDead && invulnerable <= 0 && shieldTime <= 0 && pt) {
             GameObject playerBox = makeHitbox(pt->x, pt->y, 40.f, 30.f);
             for (auto& b : enemyBullets) {
                 auto* bc = b.getComponent<BulletComponent>();
@@ -609,6 +688,36 @@ struct Game {
         }
     }
 
+    // Milestone 5 Section 2: dash trail and shield around the ship
+    void drawChordEffects() {
+        if (playerDead) return;
+        float px = go::getX(player);
+        float py = go::getY(player);
+
+        // Dash: fading boxes from where the dash started to where it ended
+        if (dashTrail > 0) {
+            Uint8 alpha = (Uint8)(200.f * dashTrail / 0.2f);
+            SDL_SetRenderDrawColor(renderer, 120, 255, 255, alpha);
+            for (int i = 1; i <= 4; i++) {
+                float x = dashFromX + (px - dashFromX) * (i / 5.0f);
+                SDL_FRect ghost{x - 20.f, py - 12.f, 40.f, 24.f};
+                SDL_RenderRect(renderer, &ghost);
+            }
+        }
+
+        // Shield: two glowing outlines around the ship, blinking near the end
+        if (shieldTime > 0) {
+            if (shieldTime < 0.4f && ((int)(shieldTime * 20)) % 2 == 0) return;
+            SDL_SetRenderDrawColor(renderer, 80, 200, 255, 90);
+            SDL_FRect fill{px - 42.f, py - 42.f, 84.f, 84.f};
+            SDL_RenderFillRect(renderer, &fill);
+            SDL_SetRenderDrawColor(renderer, 120, 230, 255, 255);
+            SDL_RenderRect(renderer, &fill);
+            SDL_FRect inner{px - 38.f, py - 38.f, 76.f, 76.f};
+            SDL_RenderRect(renderer, &inner);
+        }
+    }
+
     // Draw one list of bullets as simple rectangles
     void drawBulletList(const std::vector<GameObject>& bullets) {
         for (const auto& b : bullets) {
@@ -625,6 +734,7 @@ struct Game {
 
         if (state == PLAYING || state == LEVEL_CLEAR) {
             for (const auto& obj : inv) drawInvader(obj);
+            drawChordEffects();
             drawPlayer();
 
             SDL_SetRenderDrawColor(renderer, 120, 255, 255, 255);
@@ -653,10 +763,15 @@ struct Game {
         const char* pausedSuffix = timeline.isPaused() ? "  [PAUSED - Press P]" : "";
         switch (state) {
             case TITLE:
-                snprintf(t, sizeof(t), "SPACE INVADERS - Press ENTER to start"); break;
-            case PLAYING:
-                snprintf(t, sizeof(t), "Level %d (%s)  |  Score: %d  |  Lives: %d%s",
-                         level + 1, names[level], score, lives, pausedSuffix); break;
+                snprintf(t, sizeof(t), "SPACE INVADERS - ENTER to start  |  A+D shield  |  double-tap A/D dash"); break;
+            case PLAYING: {
+                char shield[32];
+                if (shieldTime > 0) snprintf(shield, sizeof(shield), "UP");
+                else if (shieldCooldown > 0) snprintf(shield, sizeof(shield), "%.1fs", shieldCooldown);
+                else snprintf(shield, sizeof(shield), "READY (A+D)");
+                snprintf(t, sizeof(t), "Level %d (%s)  |  Score: %d  |  Lives: %d  |  Shield: %s%s",
+                         level + 1, names[level], score, lives, shield, pausedSuffix); break;
+            }
             case LEVEL_CLEAR:
                 snprintf(t, sizeof(t), "Level %d clear!  Score: %d%s",
                          level + 1, score, pausedSuffix); break;

@@ -177,9 +177,17 @@ add_executable(
 
 add_test(NAME replay COMMAND test_replay)
 
+# M5 S2: Headless test for input chords (no SDL or ZeroMQ needed)
+add_executable(
+    test_chords
+    tests/test_chords.cpp
+)
+
+add_test(NAME chords COMMAND test_chords)
+
 # "make test" only runs tests; "make check" rebuilds the test first, then runs it
 add_custom_target(
     check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-    DEPENDS test_network_events test_replay
+    DEPENDS test_network_events test_replay test_chords
 )
