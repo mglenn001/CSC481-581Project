@@ -18,6 +18,38 @@ if(NOT CPPZMQ_INCLUDE_DIR)
     message(FATAL_ERROR "cppzmq not found")
 endif()
 
+# Space Invaders standalone single-player game
+add_executable(
+    space_invaders
+    src/space_invaders.cpp
+    src/Entity.cpp
+    src/Physics.cpp
+    src/Input.cpp
+    src/Collision.cpp
+    src/Scaling.cpp
+    src/Timeline.cpp
+)
+
+target_include_directories(
+    space_invaders
+    PRIVATE
+    ${CPPZMQ_INCLUDE_DIR}
+    ${ZMQ_INCLUDE_DIRS}
+)
+
+target_link_directories(
+    space_invaders
+    PRIVATE
+    ${ZMQ_LIBRARY_DIRS}
+)
+
+target_link_libraries(
+    space_invaders
+    PRIVATE
+    SDL3::SDL3
+    SDL3_image::SDL3_image
+)
+
 # Game client
 add_executable(
     main
@@ -145,9 +177,17 @@ add_executable(
 
 add_test(NAME replay COMMAND test_replay)
 
+# M5 S2: Headless test for input chords (no SDL or ZeroMQ needed)
+add_executable(
+    test_chords
+    tests/test_chords.cpp
+)
+
+add_test(NAME chords COMMAND test_chords)
+
 # "make test" only runs tests; "make check" rebuilds the test first, then runs it
 add_custom_target(
     check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-    DEPENDS test_network_events test_replay
+    DEPENDS test_network_events test_replay test_chords
 )

@@ -15,7 +15,10 @@
 enum class EventType {
     Input, Collision, Death, Spawn,
     ReplayRecordStart, ReplayRecordStop,
-    ReplayPlaybackStart, ReplayPlaybackStop, ReplayPlaybackSpeed
+    ReplayPlaybackStart, ReplayPlaybackStop, ReplayPlaybackSpeed,
+    // Milestone 5 Section 2: a chord or key sequence was detected (see InputChords.h).
+    // detail = the chord's name. Local only, like the replay types.
+    InputChord
 };
 enum class EventPriority { Low = 0, Normal = 1, High = 2, Critical = 3 };
 
