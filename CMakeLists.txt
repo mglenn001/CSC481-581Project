@@ -185,9 +185,13 @@ add_executable(
 
 add_test(NAME chords COMMAND test_chords)
 
+# M5 S1: Headless test for the custom object pool
+add_executable(test_object_pool tests/test_object_pool.cpp)
+add_test(NAME object_pool COMMAND test_object_pool)
+
 # "make test" only runs tests; "make check" rebuilds the test first, then runs it
 add_custom_target(
     check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-    DEPENDS test_network_events test_replay test_chords
+    DEPENDS test_network_events test_replay test_chords test_object_pool
 )

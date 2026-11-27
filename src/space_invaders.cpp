@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "GameObject.h"
+#include "ObjectPool.h"    // Milestone 5 Section 1: memory management
 #include "Components.h"
 #include "GameObjectOps.h"
 #include "Physics.h"
@@ -132,14 +133,18 @@ GameObject makeInvader(float x, float y, int row, int col, int hp, SDL_Texture* 
 }
 
 // Make one bullet object for player or enemy
-GameObject makeBullet(float x, float y, float vy, bool fromPlayer) {
-    GameObject obj("bullet");
-    obj.addComponent<TransformComponent>(x, y, 6.0f, 16.0f);
-    auto& v = obj.addComponent<VelocityComponent>();
+using BulletPool = ObjectPool<GameObject>;
+using BulletList = std::vector<BulletPool::Handle>;
+
+BulletPool::Handle makeBullet(BulletPool& pool, float x, float y, float vy, bool fromPlayer) {
+    auto obj = pool.acquire("bullet");
+    if (!obj) return obj; // Pool is full; skip this shot without allocating more memory.
+    obj->addComponent<TransformComponent>(x, y, 6.0f, 16.0f);
+    auto& v = obj->addComponent<VelocityComponent>();
     v.vy = vy;
-    obj.addComponent<CollidableComponent>();
-    obj.addComponent<RenderableComponent>();
-    auto& b = obj.addComponent<BulletComponent>();
+    obj->addComponent<CollidableComponent>();
+    obj->addComponent<RenderableComponent>();
+    auto& b = obj->addComponent<BulletComponent>();
     b.fromPlayer = fromPlayer;
     b.alive = true;
     return obj;
@@ -175,8 +180,12 @@ struct Game {
     float animClock = 0;
 
     // Active shots
-    std::vector<GameObject> playerBullets;
-    std::vector<GameObject> enemyBullets;
+    // Reserve storage for 64 GameObjects once, shared by both shot lists.
+    // Handles return slots when bullets are erased or a level is reset.
+    static constexpr std::size_t BULLET_CAPACITY = 64;
+    BulletPool bulletPool{BULLET_CAPACITY};
+    BulletList playerBullets;
+    BulletList enemyBullets;
 
     float stateTimer = 0; // Wait timer between levels
 
@@ -301,6 +310,11 @@ struct Game {
         auto& pr = player.addComponent<RenderableComponent>();
         pr.texture = texShip;
 
+        playerBullets.reserve(bulletPool.capacity());
+        enemyBullets.reserve(bulletPool.capacity());
+        std::cout << "[Memory pool] Reserved " << bulletPool.capacity()
+                  << " GameObject slots for bullets\n";
+
         setupEventLogs();
         setupChords();
         timeline.getDeltaTime(); // Clear first frame time
@@ -324,6 +338,8 @@ struct Game {
         inv.clear();
         playerBullets.clear();
         enemyBullets.clear();
+        std::cout << "[Memory pool] Available slots after level reset: "
+                  << bulletPool.available() << "/" << bulletPool.capacity() << "\n";
 
         float gapX = 56, gapY = 48;
         float startX = W / 2.f - (L.cols - 1) * gapX / 2.f;
@@ -443,11 +459,11 @@ struct Game {
     }
 
     // Move bullets and remove ones that leave the screen
-    void updateBullets(std::vector<GameObject>& bullets, float dt, float minY, float maxY) {
+    void updateBullets(BulletList& bullets, float dt, float minY, float maxY) {
         for (auto& b : bullets) {
-            auto* bc = b.getComponent<BulletComponent>();
-            auto* vc = b.getComponent<VelocityComponent>();
-            auto* tc = b.getComponent<TransformComponent>();
+            auto* bc = b->getComponent<BulletComponent>();
+            auto* vc = b->getComponent<VelocityComponent>();
+            auto* tc = b->getComponent<TransformComponent>();
             if (!bc || !bc->alive || !vc || !tc) continue;
 
             tc->x += vc->vx * dt;
@@ -455,8 +471,8 @@ struct Game {
             if (tc->y < minY || tc->y > maxY) bc->alive = false;
         }
         bullets.erase(
-            std::remove_if(bullets.begin(), bullets.end(), [](const GameObject& b) {
-                auto* bc = b.getComponent<BulletComponent>();
+            std::remove_if(bullets.begin(), bullets.end(), [](const BulletPool::Handle& b) {
+                auto* bc = b->getComponent<BulletComponent>();
                 return !bc || !bc->alive;
             }),
             bullets.end()
@@ -530,8 +546,11 @@ struct Game {
             // Fire a player shot with Space
             if (Input::isKeyPressed(SDL_SCANCODE_SPACE) && shootCooldown <= 0 &&
                 (int)playerBullets.size() < L.maxPlayerBullets && pt) {
-                playerBullets.push_back(makeBullet(pt->x, pt->y - 30, -BULLET_SPEED, true));
-                shootCooldown = 0.25f;
+                auto bullet = makeBullet(bulletPool, pt->x, pt->y - 30, -BULLET_SPEED, true);
+                if (bullet) {
+                    playerBullets.push_back(std::move(bullet));
+                    shootCooldown = 0.25f;
+                }
             }
         }
 
@@ -576,9 +595,9 @@ struct Game {
                 }
             }
             if (shooter) {
-                enemyBullets.push_back(
-                    makeBullet(go::getX(*shooter), go::getY(*shooter) + 20, ENEMY_BULLET_SPEED, false)
-                );
+                auto bullet = makeBullet(bulletPool, go::getX(*shooter),
+                                         go::getY(*shooter) + 20, ENEMY_BULLET_SPEED, false);
+                if (bullet) enemyBullets.push_back(std::move(bullet));
             }
         }
 
@@ -588,9 +607,9 @@ struct Game {
 
         // Check if player bullets hit invaders
         for (auto& b : playerBullets) {
-            auto* bc = b.getComponent<BulletComponent>();
+            auto* bc = b->getComponent<BulletComponent>();
             if (!bc || !bc->alive) continue;
-            GameObject bulletBox = makeHitbox(go::getX(b), go::getY(b), 6.f, 16.f);
+            GameObject bulletBox = makeHitbox(go::getX(*b), go::getY(*b), 6.f, 16.f);
 
             for (auto& obj : inv) {
                 auto* ic = obj.getComponent<InvaderComponent>();
@@ -622,13 +641,13 @@ struct Game {
         if (!playerDead && shieldTime > 0 && pt) {
             GameObject shieldBox = makeHitbox(pt->x, pt->y, 84.f, 84.f);
             for (auto& b : enemyBullets) {
-                auto* bc = b.getComponent<BulletComponent>();
+                auto* bc = b->getComponent<BulletComponent>();
                 if (!bc || !bc->alive) continue;
-                GameObject bulletBox = makeHitbox(go::getX(b), go::getY(b), 6.f, 16.f);
+                GameObject bulletBox = makeHitbox(go::getX(*b), go::getY(*b), 6.f, 16.f);
                 if (Collision::checkCollision(bulletBox, shieldBox)) {
                     bc->alive = false;
                     emitEvent(EventType::Collision, "Enemy bullet blocked by shield",
-                              pt->x, pt->y, EventPriority::Normal, b.getId(), player.getId());
+                              pt->x, pt->y, EventPriority::Normal, b->getId(), player.getId());
                 }
             }
         }
@@ -637,9 +656,9 @@ struct Game {
         if (!playerDead && invulnerable <= 0 && shieldTime <= 0 && pt) {
             GameObject playerBox = makeHitbox(pt->x, pt->y, 40.f, 30.f);
             for (auto& b : enemyBullets) {
-                auto* bc = b.getComponent<BulletComponent>();
+                auto* bc = b->getComponent<BulletComponent>();
                 if (!bc || !bc->alive) continue;
-                GameObject bulletBox = makeHitbox(go::getX(b), go::getY(b), 6.f, 16.f);
+                GameObject bulletBox = makeHitbox(go::getX(*b), go::getY(*b), 6.f, 16.f);
 
                 if (Collision::checkCollision(bulletBox, playerBox)) {
                     bc->alive = false;
@@ -647,7 +666,7 @@ struct Game {
                     playerDead = true;
                     playerDeadTime = 0;
                     emitEvent(EventType::Collision, "Enemy bullet hit player ship",
-                              pt->x, pt->y, EventPriority::High, b.getId(), player.getId());
+                              pt->x, pt->y, EventPriority::High, b->getId(), player.getId());
                     emitEvent(EventType::Death,
                               "Player ship destroyed (lives left: " + std::to_string(lives) + ")",
                               pt->x, pt->y, EventPriority::Critical, player.getId());
@@ -719,11 +738,11 @@ struct Game {
     }
 
     // Draw one list of bullets as simple rectangles
-    void drawBulletList(const std::vector<GameObject>& bullets) {
+    void drawBulletList(const BulletList& bullets) {
         for (const auto& b : bullets) {
-            auto* bc = b.getComponent<BulletComponent>();
+            auto* bc = b->getComponent<BulletComponent>();
             if (!bc || !bc->alive) continue;
-            SDL_FRect r{go::getX(b) - 3.f, go::getY(b) - 8.f, 6.f, 16.f};
+            SDL_FRect r{go::getX(*b) - 3.f, go::getY(*b) - 8.f, 6.f, 16.f};
             SDL_RenderFillRect(renderer, &r);
         }
     }
